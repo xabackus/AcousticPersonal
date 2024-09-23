@@ -45,14 +45,14 @@ po = 10e6 # acoustic pressure
 
 ax = np.array([1.0])
 ay = np.array([1.0])
-kx = np.array([3])
-ky = np.array([1])
+kx = np.array([3], dtype=int)
+ky = np.array([1], dtype=int)
 
 # convert arrays into Taichi fields
 ax_field = ti.field(dtype=ti.f32, shape=ax.shape)
 ay_field = ti.field(dtype=ti.f32, shape=ay.shape)
-kx_field = ti.field(dtype=ti.f32, shape=kx.shape)
-ky_field = ti.field(dtype=ti.f32, shape=ky.shape)
+kx_field = ti.field(dtype=ti.i32, shape=kx.shape)
+ky_field = ti.field(dtype=ti.i32, shape=ky.shape)
 
 ax_field.from_numpy(ax)
 ay_field.from_numpy(ay)
@@ -317,10 +317,10 @@ particle_node_assignments = ti.field(ti.i32, N)  # Store which node each particl
 def assign_particles_to_clusters():
     # Step 1: Create the node grid positions
     index = 0
-    for i in range(kx[0]):
-        for j in range(ky[0]):
-            node_x = (i + 0.5) / kx[0]  # Uniformly space nodes in x
-            node_y = (j + 0.5) / ky[0]  # Uniformly space nodes in y
+    for i in range(kx_field[0]):  # Use integer fields
+        for j in range(ky_field[0]):
+            node_x = (i + 0.5) / kx_field[0]  # Uniformly space nodes in x
+            node_y = (j + 0.5) / ky_field[0]  # Uniformly space nodes in y
             node_positions[index] = ti.Vector([node_x, node_y])
             index += 1
 
@@ -328,15 +328,17 @@ def assign_particles_to_clusters():
     for i in range(N):
         min_dist = float('inf')
         closest_node = 0
-        
-        for node in range(kx[0] * ky[0]):
+
+        for node in range(kx_field[0] * ky_field[0]):
             dist = (pos[i] - node_positions[node]).norm()  # Calculate distance between particle and node
             if dist < min_dist:
                 min_dist = dist
                 closest_node = node
-        
+
         # Step 3: Assign particle to the closest node
         particle_node_assignments[i] = closest_node
+
+total_clusters = kx[0] * ky[0]
 
 while gui.running: # update frames, intervel is time step h
 
@@ -348,7 +350,7 @@ while gui.running: # update frames, intervel is time step h
         elif e.key == ti.GUI.SPACE:
             paused[None] = not paused[None]
         elif e.key in "123456789":
-            val = float(e.key)
+            val = int(e.key)
             if xchanging:
                 kx_field[0] = kx[0] = val
             else:
@@ -376,6 +378,15 @@ while gui.running: # update frames, intervel is time step h
         # Step 4: Assign particles to clusters
         assign_particles_to_clusters()
 
+        # Convert Taichi field to NumPy array
+        assignments = particle_node_assignments.to_numpy()
+
+        # Calculate the total number of clusters
+        total_clusters = kx[0] * ky[0]
+
+        # Count the number of particles in each cluster
+        counts = np.bincount(assignments, minlength=total_clusters)
+
     gui.clear(0x112F41) # Hex code of the color: 0x000000 = black, 0xffffff = white
 
     lines_start = np.zeros((kx[0] + ky[0], 2))
@@ -392,10 +403,24 @@ while gui.running: # update frames, intervel is time step h
             color = int( ti.rgb_to_hex((h, h, h)) ), \
             radius = particle_radius[i] * float(res))
         
-    gui.text(message, pos=(0.05, 0.95), color=0xFFFFFF, font_size=20)
+    # Define starting position and spacing
+    start_x = 0.05  # Position near the right edge
+    start_y = 0.95  # Start near the top
+    spacing = 0.03   # Vertical spacing between lines
+
+    # Iterate over each cluster and display its count
+    for cluster_idx, count in enumerate(counts):
+        cluster_text = f"Cluster {cluster_idx + 1}: {count} particles"
+        y_pos = start_y - cluster_idx * spacing
+        # Ensure that text doesn't go below the bottom of the screen
+        if y_pos < 0.05:
+            break
+        gui.text(cluster_text, pos=(start_x, y_pos), color=0xFFFFFF, font_size=16)
+        
+    gui.text(message, pos=(0.05, 0.99), color=0xFFFFFF, font_size=20)
     # pos=(x, y) coordinates range from (0,0) bottom-left to (1,1) top-right
 
-    gui.text(f"Number of groups = {kx[0] * ky[0]}", pos=(0.05, 0.15), color=0xFFFFFF, font_size=20)
+    gui.text(f"Number of groups = {total_clusters}", pos=(0.05, 0.15), color=0xFFFFFF, font_size=20)
     
     gui.fps_limit = 30
     gui.show()
