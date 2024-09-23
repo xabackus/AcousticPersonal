@@ -309,6 +309,35 @@ initialize_cluster()
 xchanging = True
 message = "Changing number of nodes along X-axis"
 
+# Node fields
+node_positions = ti.Vector.field(2, ti.f32, (kx[0] * ky[0]))  # Node positions grid
+particle_node_assignments = ti.field(ti.i32, N)  # Store which node each particle is assigned to
+
+@ti.kernel
+def assign_particles_to_clusters():
+    # Step 1: Create the node grid positions
+    index = 0
+    for i in range(kx[0]):
+        for j in range(ky[0]):
+            node_x = (i + 0.5) / kx[0]  # Uniformly space nodes in x
+            node_y = (j + 0.5) / ky[0]  # Uniformly space nodes in y
+            node_positions[index] = ti.Vector([node_x, node_y])
+            index += 1
+
+    # Step 2: Assign each particle to the closest node
+    for i in range(N):
+        min_dist = float('inf')
+        closest_node = 0
+        
+        for node in range(kx[0] * ky[0]):
+            dist = (pos[i] - node_positions[node]).norm()  # Calculate distance between particle and node
+            if dist < min_dist:
+                min_dist = dist
+                closest_node = node
+        
+        # Step 3: Assign particle to the closest node
+        particle_node_assignments[i] = closest_node
+
 while gui.running: # update frames, intervel is time step h
 
     for e in gui.get_events(ti.GUI.PRESS): #event processing
@@ -343,6 +372,10 @@ while gui.running: # update frames, intervel is time step h
             compute_energy()
             calc_neighbors()
             # print("Current energy = {}, Initial energy = {}, Ratio = {}".format(energy[1],energy[0],energy[1]/energy[0]))
+
+        # Step 4: Assign particles to clusters
+        assign_particles_to_clusters()
+
     gui.clear(0x112F41) # Hex code of the color: 0x000000 = black, 0xffffff = white
 
     lines_start = np.zeros((kx[0] + ky[0], 2))
@@ -360,7 +393,9 @@ while gui.running: # update frames, intervel is time step h
             radius = particle_radius[i] * float(res))
         
     gui.text(message, pos=(0.05, 0.95), color=0xFFFFFF, font_size=20)
-        # pos=(x, y) coordinates range from (0,0) bottom-left to (1,1) top-right
+    # pos=(x, y) coordinates range from (0,0) bottom-left to (1,1) top-right
+
+    gui.text(f"Number of groups = {kx[0] * ky[0]}", pos=(0.05, 0.15), color=0xFFFFFF, font_size=20)
     
     gui.fps_limit = 30
     gui.show()
