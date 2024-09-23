@@ -6,6 +6,13 @@ import taichi as ti
 
 import sys
 
+import math
+
+# Define maximum clusters
+MAX_KX = 10
+MAX_KY = 10
+MAX_CLUSTERS = MAX_KX * MAX_KY  # Adjust as needed
+
 # Environment Setup
 @ti.data_oriented
 class AcousticEnv():
@@ -45,14 +52,14 @@ po = 10e6 # acoustic pressure
 
 ax = np.array([1.0])
 ay = np.array([1.0])
-kx = np.array([3])
-ky = np.array([1])
+kx = np.array([3], dtype=int)
+ky = np.array([1], dtype=int)
 
 # convert arrays into Taichi fields
 ax_field = ti.field(dtype=ti.f32, shape=ax.shape)
 ay_field = ti.field(dtype=ti.f32, shape=ay.shape)
-kx_field = ti.field(dtype=ti.f32, shape=kx.shape)
-ky_field = ti.field(dtype=ti.f32, shape=ky.shape)
+kx_field = ti.field(dtype=ti.i32, shape=kx.shape)
+ky_field = ti.field(dtype=ti.i32, shape=ky.shape)
 
 ax_field.from_numpy(ax)
 ay_field.from_numpy(ay)
@@ -309,34 +316,37 @@ initialize_cluster()
 xchanging = True
 message = "Changing number of nodes along X-axis"
 
-# Node fields
-node_positions = ti.Vector.field(2, ti.f32, (kx[0] * ky[0]))  # Node positions grid
+# Initialize node_positions with MAX_CLUSTERS
+node_positions = ti.Vector.field(2, ti.f32, MAX_CLUSTERS)  # Node positions grid
 particle_node_assignments = ti.field(ti.i32, N)  # Store which node each particle is assigned to
 
 @ti.kernel
 def assign_particles_to_clusters():
     # Step 1: Create the node grid positions
     index = 0
-    for i in range(kx[0]):
-        for j in range(ky[0]):
-            node_x = (i + 0.5) / kx[0]  # Uniformly space nodes in x
-            node_y = (j + 0.5) / ky[0]  # Uniformly space nodes in y
-            node_positions[index] = ti.Vector([node_x, node_y])
-            index += 1
+    for i in range(min(kx_field[0], MAX_KX)):  # Ensure i doesn't exceed MAX_KX
+        for j in range(min(ky_field[0], MAX_KY)):  # Ensure j doesn't exceed MAX_KY
+            node_x = (i + 0.5) / kx_field[0]  # Uniformly space nodes in x
+            node_y = (j + 0.5) / ky_field[0]  # Uniformly space nodes in y
+            if index < MAX_CLUSTERS:
+                node_positions[index] = ti.Vector([node_x, node_y])
+                index += 1
 
     # Step 2: Assign each particle to the closest node
     for i in range(N):
         min_dist = float('inf')
         closest_node = 0
-        
-        for node in range(kx[0] * ky[0]):
+
+        for node in range(min(kx_field[0] * ky_field[0], MAX_CLUSTERS)):
             dist = (pos[i] - node_positions[node]).norm()  # Calculate distance between particle and node
             if dist < min_dist:
                 min_dist = dist
                 closest_node = node
-        
+
         # Step 3: Assign particle to the closest node
         particle_node_assignments[i] = closest_node
+
+total_clusters = kx[0] * ky[0]
 
 while gui.running: # update frames, intervel is time step h
 
@@ -348,7 +358,7 @@ while gui.running: # update frames, intervel is time step h
         elif e.key == ti.GUI.SPACE:
             paused[None] = not paused[None]
         elif e.key in "123456789":
-            val = float(e.key)
+            val = int(e.key)
             if xchanging:
                 kx_field[0] = kx[0] = val
             else:
@@ -376,6 +386,15 @@ while gui.running: # update frames, intervel is time step h
         # Step 4: Assign particles to clusters
         assign_particles_to_clusters()
 
+        # Convert Taichi field to NumPy array
+        assignments = particle_node_assignments.to_numpy()
+
+        # Calculate the total number of clusters
+        total_clusters = kx[0] * ky[0]
+
+        # Count the number of particles in each cluster
+        counts = np.bincount(assignments, minlength=total_clusters)
+
     gui.clear(0x112F41) # Hex code of the color: 0x000000 = black, 0xffffff = white
 
     lines_start = np.zeros((kx[0] + ky[0], 2))
@@ -391,11 +410,50 @@ while gui.running: # update frames, intervel is time step h
         gui.circles(pos_1.to_numpy(), \
             color = int( ti.rgb_to_hex((h, h, h)) ), \
             radius = particle_radius[i] * float(res))
+    
+    # Convert node_positions to a NumPy array for easy iteration
+    node_positions_np = node_positions.to_numpy()
+
+    # Iterate over each node and render its cluster number
+    for cluster_idx in range(total_clusters):
+        node_pos = node_positions_np[cluster_idx]
+
+        # Define the position for the text slightly above the node
+        # Adjust the offset as needed (e.g., 0.02 units upwards)
+        text_pos = (node_pos[0], node_pos[1] + 0.02)
+
+        # Ensure the text does not go out of bounds
+        text_pos = (
+            min(max(text_pos[0], 0.0), 1.0),
+            min(max(text_pos[1], 0.0), 1.0),
+        )
+
+        # Render the cluster number. Convert cluster_idx to string.
+        gui.text(
+            str(cluster_idx + 1),  # +1 for 1-based indexing
+            pos=text_pos,
+            color=0xFFFFFF,  # White color for visibility
+            font_size=16,
+        )
         
-    gui.text(message, pos=(0.05, 0.95), color=0xFFFFFF, font_size=20)
+    # Define starting position and spacing
+    start_x = 0.05  # Position near the right edge
+    start_y = 0.95  # Start near the top
+    spacing = 0.03   # Vertical spacing between lines
+
+    # Iterate over each cluster and display its count
+    for cluster_idx, count in enumerate(counts):
+        cluster_text = f"Cluster {cluster_idx + 1}: {count} particles"
+        y_pos = start_y - cluster_idx * spacing
+        # Ensure that text doesn't go below the bottom of the screen
+        if y_pos < 0.05:
+            break
+        gui.text(cluster_text, pos=(start_x, y_pos), color=0xFFFFFF, font_size=16)
+        
+    gui.text(message, pos=(0.05, 0.99), color=0xFFFFFF, font_size=20)
     # pos=(x, y) coordinates range from (0,0) bottom-left to (1,1) top-right
 
-    gui.text(f"Number of groups = {kx[0] * ky[0]}", pos=(0.05, 0.15), color=0xFFFFFF, font_size=20)
+    gui.text(f"Number of groups = {total_clusters}", pos=(0.05, 0.15), color=0xFFFFFF, font_size=20)
     
     gui.fps_limit = 30
     gui.show()
