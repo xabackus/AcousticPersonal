@@ -207,6 +207,12 @@ def compute_energy():
 
 neighbors = ti.field(ti.i32, N)
 
+# Create a list to store the average number of neighbors over time
+average_neighbors_over_time = []
+
+# Create lists to store the number of particles with 0, 1, 2, 3, 4, 5, and 6 neighbors
+# neighbor_count_over_time = {i: [] for i in range(7)}
+
 @ti.kernel
 def calc_neighbors(): # number of neighbors of each particle
 
@@ -219,6 +225,21 @@ def calc_neighbors(): # number of neighbors of each particle
             if r < particle_radius[i] + particle_radius[j] + 2e-3:
                 neighbors[i] += 1
                 neighbors[j] += 1
+
+# Function to calculate and store the average number of neighbors
+def update_average_neighbors():
+    avg_neighbors = np.mean(neighbors.to_numpy())
+    average_neighbors_over_time.append(avg_neighbors)
+
+def plot_average_neighbors_over_time():
+    plt.figure(figsize=(10, 6))
+    plt.plot(average_neighbors_over_time, label="Average Neighbors Over Time", color="blue", linewidth=2)
+    plt.xlabel("Time Step")
+    plt.ylabel("Average Number of Neighbors")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f"average_neighbors_{c}.png")
+    plt.show()
 
 def plot():
 
@@ -371,6 +392,7 @@ while gui.running: # update frames, intervel is time step h
             message = "Changing number of nodes along Y-axis"
         elif e.key == "g":
             plot_radial_distribution()
+            plot_average_neighbors_over_time()  # Plot the average number of neighbors
     
     if not paused[None]:
         for i in range(substepping): # run substepping times for each time step
@@ -381,10 +403,11 @@ while gui.running: # update frames, intervel is time step h
             vel.copy_from(vel_p1)
             compute_energy()
             calc_neighbors()
+            assign_particles_to_clusters()
+            update_average_neighbors()
             # print("Current energy = {}, Initial energy = {}, Ratio = {}".format(energy[1],energy[0],energy[1]/energy[0]))
 
         # Step 4: Assign particles to clusters
-        assign_particles_to_clusters()
 
         # Convert Taichi field to NumPy array
         assignments = particle_node_assignments.to_numpy()
