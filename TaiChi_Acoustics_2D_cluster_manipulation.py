@@ -211,11 +211,13 @@ neighbors = ti.field(ti.i32, N)
 average_neighbors_over_time = []
 
 # Create lists to store the number of particles with 0, 1, 2, 3, 4, 5, and 6 neighbors
-# neighbor_count_over_time = {i: [] for i in range(7)}
+neighbor_count_over_time = {i: [] for i in range(7)}
+
+# Create a Taichi field to store the number of particles with 0, 1, 2, 3, 4, 5, and 6 neighbors
+neighbor_counts_field = ti.field(dtype=ti.i32, shape=(7,))
 
 @ti.kernel
 def calc_neighbors(): # number of neighbors of each particle
-
     for i in range(N):
         neighbors[i] = 0
     
@@ -226,10 +228,26 @@ def calc_neighbors(): # number of neighbors of each particle
                 neighbors[i] += 1
                 neighbors[j] += 1
 
+    # Clear the neighbor counts field
+    for i in range(7):
+        neighbor_counts_field[i] = 0
+
+    # Count how many particles have 0, 1, 2, ..., 6 neighbors
+    for i in range(N):
+        if neighbors[i] <= 6:  # Cap the number of neighbors at 6 for this analysis
+            neighbor_counts_field[neighbors[i]] += 1
+
 # Function to calculate and store the average number of neighbors
 def update_average_neighbors():
     avg_neighbors = np.mean(neighbors.to_numpy())
     average_neighbors_over_time.append(avg_neighbors)
+
+# After the kernel is run, transfer the data from the Taichi field to a Python list
+def update_neighbor_count_over_time():
+    counts = neighbor_counts_field.to_numpy()  # Convert the Taichi field to a NumPy array
+    for i in range(7):
+        neighbor_count_over_time[i].append(counts[i])  # Append the counts to the Python list
+
 
 def plot_average_neighbors_over_time():
     plt.figure(figsize=(10, 6))
@@ -239,6 +257,21 @@ def plot_average_neighbors_over_time():
     plt.legend()
     plt.grid(True)
     plt.savefig(f"average_neighbors_{c}.png")
+    plt.show()
+
+def plot_neighbor_distribution_over_time():
+    plt.figure(figsize=(10, 6))
+    
+    # Plot each neighbor count over time
+    for i in range(7):
+        plt.plot(neighbor_count_over_time[i], label=f"Particles with {i} neighbors", linewidth=2)
+
+    plt.xlabel("Time Step")
+    plt.ylabel("Number of Particles")
+    plt.title("Neighbor Distribution Over Time")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f"neighbor_distribution_{c}.png")
     plt.show()
 
 def plot():
@@ -393,6 +426,7 @@ while gui.running: # update frames, intervel is time step h
         elif e.key == "g":
             plot_radial_distribution()
             plot_average_neighbors_over_time()  # Plot the average number of neighbors
+            plot_neighbor_distribution_over_time()  # Plot the neighbor distribution over time
     
     if not paused[None]:
         for i in range(substepping): # run substepping times for each time step
@@ -405,6 +439,7 @@ while gui.running: # update frames, intervel is time step h
             calc_neighbors()
             assign_particles_to_clusters()
             update_average_neighbors()
+            update_neighbor_count_over_time()  # Update the neighbor count data for plotting
             # print("Current energy = {}, Initial energy = {}, Ratio = {}".format(energy[1],energy[0],energy[1]/energy[0]))
 
         # Step 4: Assign particles to clusters
