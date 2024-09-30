@@ -393,15 +393,15 @@ def plot_radial_distribution():
 
     positions = pos.to_numpy()
 
-    rs = np.linspace(0, 0.1, 500)
+    rs = np.linspace(0, np.sqrt(2), 500)  # Updated the range to cover the entire domain
     gs = np.zeros_like(rs)
-    mid = sum(positions) / N
+    mid = np.mean(positions, axis=0)  # Compute the center of mass of the particles
 
     plt.figure(figsize=(10, 6))
     for j in range(N):
         distance = np.linalg.norm(positions[j] - mid)
         for i, r in enumerate(rs):
-            contribution = np.sqrt(max(0., 1. - (distance - r)**2 / particle_radius[j]**2))
+            contribution = np.sqrt(max(0., 1. - ((distance - r) ** 2) / (particle_radius[j] ** 2)))
             gs[i] += contribution
 
     plt.plot(rs, gs, label="Radial Distribution Function", color="black", linewidth=2, linestyle="--")
@@ -410,6 +410,7 @@ def plot_radial_distribution():
     plt.legend()
     plt.grid(True)
     plt.savefig(f"radial_distribution_{c}.png")
+    plt.show()
     c += 1
 
 if len(sys.argv) > 1 and sys.argv[1] == "plot":
