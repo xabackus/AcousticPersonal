@@ -17,20 +17,20 @@ class AcousticEnv():
     def __init__(self, particles: int):
         """ti.init(arch=ti.cpu) #initialization arch ti.cpu/ti.gpu"""
 
-ti.init(arch=ti.cpu) #initialization arch ti.cpu/ti.gpu
+ti.init(arch=ti.cpu)  # initialization arch ti.cpu/ti.gpu
 PI = 3.1415926
 res = 512
 # global control
-paused = ti.field(ti.i32, ()) # a scalar i32
+paused = ti.field(ti.i32, ())  # a scalar i32
 
-N = 61 # number of particles
-particle_m_max = 5.0 # mass 
-nest_size = 0.6 # nest size
-particle_radius_max = 10.0 / float(res) # particle radius for rendering
-init_vel = 100 # inital velocity -- NOT IMPLEMENTED but you take it out and particles disappear
+N = 61  # number of particles
+particle_m_max = 5.0  # mass
+nest_size = 0.6  # nest size
+particle_radius_max = 10.0 / float(res)  # particle radius for rendering
+init_vel = 100  # initial velocity
 
-h = 1e-5 # time step
-substepping = 3 # the number of sub-iterations within a time step
+h = 1e-5  # time step
+substepping = 3  # the number of sub-iterations within a time step
 
 # declare fields (pos, vel, force of the particles)
 pos = ti.Vector.field(2, ti.f32, N)
@@ -42,11 +42,11 @@ force = ti.Vector.field(2, ti.f32, N)
 particle_radius = ti.field(ti.f32, N)
 particle_m = ti.field(ti.f32, N)
 
-energy = ti.field(ti.f32, shape = 2) # [1] current energy [0] initial energy
+energy = ti.field(ti.f32, shape=2)  # [1] current energy [0] initial energy
 particle_color = ti.Vector.field(3, ti.f32, N)
 
 # Acoustic properties
-po = 10e6 # acoustic pressure
+po = 10e6  # acoustic pressure
 
 ax = np.array([1.0])
 ay = np.array([1.0])
@@ -70,25 +70,25 @@ num_waves_y = ti.field(dtype=ti.i32, shape=())
 num_waves_x[None] = len(ax)
 num_waves_y[None] = len(ay)
 
-# drag properties 
+# drag properties
 drag = 3e6
-    
+
 @ti.kernel
-def initialize(): #initialize pos, vel, force of each particle
+def initialize():  # initialize pos, vel, force of each particle
     for i in range(N):
         theta = ti.random() * 2 * PI  # theta = (0, 2 pi)
-        r = (ti.sqrt(ti.random()) * 0.7 + 0.3) * nest_size # r = (0.3 1)*nest_size
+        r = (ti.sqrt(ti.random()) * 0.7 + 0.3) * nest_size  # r = (0.3 1)*nest_size
         pos[i] = ti.Vector([ti.random(), ti.random()])
         offset = init_vel * r * ti.Vector([ti.cos(theta), ti.sin(theta)])
-        vel[i] = [-offset.y, offset.x] # vel direction is perpendicular to its offset
-        
+        vel[i] = [-offset.y, offset.x]  # vel direction is perpendicular to its offset
+
         # particle_radius[i] = max(0.4, ti.random()) * particle_radius_max
         particle_radius[i] = 0.5 * particle_radius_max
         particle_m[i] = (particle_radius[i] / particle_radius_max)**2 * particle_m_max
 
         energy[0] += 0.5 * particle_m[i] * (vel[i][0]**2 + vel[i][1]**2)
         energy[1] += 0.5 * particle_m[i] * (vel[i][0]**2 + vel[i][1]**2)
-        
+
         particle_color[i][0] = 1 - particle_m[i] / particle_m_max
         particle_color[i][1] = 1 - particle_m[i] / particle_m_max
         particle_color[i][2] = 1 - particle_m[i] / particle_m_max
@@ -97,24 +97,16 @@ def initialize(): #initialize pos, vel, force of each particle
 cluster_x = 1/6
 cluster_y = 1/2
 cluster_radius = particle_radius_max
-# cluster_radius = 0.1
 
 @ti.kernel
 def initialize_cluster():
     for i in range(N):
-
-        # # Randomly distributed in circle
-        # theta = 2 * PI * ti.random()
-        # r = ti.sqrt(cluster_radius**2 * ti.random())
-        # pos[i] = ti.Vector([r * ti.cos(theta) + cluster_x, r * ti.sin(theta) + cluster_y])
-
         # Hexagonal lattice
-        # theta = 2 * PI * ti.random()
         theta = 0.0
         pos[0] = curr = ti.Vector([cluster_x, cluster_y])
         index = layer = 1
         while index < N:
-            curr += cluster_radius * ti.Vector([ti.cos(theta), ti.sin(theta)]) 
+            curr += cluster_radius * ti.Vector([ti.cos(theta), ti.sin(theta)])
             for j in range(2, 8):
                 angle = j * PI / 3 + theta
                 for _ in range(layer):
@@ -130,7 +122,7 @@ def initialize_cluster():
         theta = ti.random() * 2 * PI
         r = (ti.sqrt(ti.random()) * 0.7 + 0.3) * nest_size
         offset = init_vel * r * ti.Vector([ti.cos(theta), ti.sin(theta)])
-        vel[i] = [-offset.y, offset.x] # vel direction is perpendicular to its offset
+        vel[i] = [-offset.y, offset.x]  # vel direction is perpendicular to its offset
 
         particle_radius[i] = 0.5 * particle_radius_max
         particle_m[i] = (particle_radius[i] / particle_radius_max)**2 * particle_m_max
@@ -141,53 +133,49 @@ def initialize_cluster():
         particle_color[i][0] = 0.3 + 0.7 * ti.random()
         particle_color[i][1] = 0.3 + 0.7 * ti.random()
         particle_color[i][2] = 0.3 + 0.7 * ti.random()
-        
+
 @ti.kernel
 def compute_force():
-
-    #clear force
+    # clear force
     for i in range(N):
         force[i] = ti.Vector([0.0, 0.0])
-    
-    #compute acoustic force
+
+    # compute acoustic force
     for i in range(N):
-        
         f_x = 0.0
         f_y = 0.0
-        
+
         for wave in range(num_waves_x[None]):
             f_x += particle_radius[i]**3 * 1000000 * ax_field[wave] * ti.sin(2 * PI * pos[i][0] * kx_field[wave])
-        
+
         for wave in range(num_waves_y[None]):
-            f_y += particle_radius[i]**3 * 1000000 * ay_field[wave] * ti.sin(2 * PI * pos[i][1] * ky_field[wave])            
-        
+            f_y += particle_radius[i]**3 * 1000000 * ay_field[wave] * ti.sin(2 * PI * pos[i][1] * ky_field[wave])
+
         # Compute total force for this position
         f_vector = ti.Vector([f_x, f_y]) * po
         force[i] += f_vector
-    
+
     # force due to drag
     for i in range(N):
         f = -drag * particle_radius[i] * vel[i]
         force[i] += f
 
-@ti.kernel  
+@ti.kernel
 def collision_update():
-    
     for i in range(N - 1):
         for j in range(i + 1, N):
-                diff = pos[j] - pos[i]
-                r = diff.norm(1e-4) # norm of Vector diff and minimum value is 1e-5 (clamp to 1e-5)
-                a = particle_radius[i] + particle_radius[j]
-                scale = a / r * 2**(1/6)
-                this_force = -max(scale**12 - 2 * scale**6, 0) * particle_m[i] * particle_m[j] * diff * 1e8
-                force[i] += this_force
-                force[j] -= this_force
+            diff = pos[j] - pos[i]
+            r = diff.norm(1e-4)  # norm of Vector diff and minimum value is 1e-5 (clamp to 1e-5)
+            a = particle_radius[i] + particle_radius[j]
+            scale = a / r * 2**(1/6)
+            this_force = -max(scale**12 - 2 * scale**6, 0) * particle_m[i] * particle_m[j] * diff * 1e8
+            force[i] += this_force
+            force[j] -= this_force
 
-@ti.kernel  
-def update(): # update the position and velocity of each particle
-    dt = h/substepping
+@ti.kernel
+def update():  # update the position and velocity of each particle
+    dt = h / substepping
     for i in range(N):
-
         vel[i] += dt * force[i] / particle_m[i]
         pos[i] += dt * vel[i]
         # collision detection at edges, flip the velocity
@@ -201,7 +189,6 @@ def compute_energy():
     energy[1] = 0.0
     for i in range(N):
         energy[1] += 0.5 * particle_m[i] * (vel[i][0]**2 + vel[i][1]**2)
-
 
 neighbors = ti.field(ti.i32, N)
 particle_node_assignments = ti.field(ti.i32, N)
@@ -289,10 +276,10 @@ neighbor_count_over_time = {i: [] for i in range(7)}
 neighbor_counts_field = ti.field(dtype=ti.i32, shape=(7,))
 
 @ti.kernel
-def calc_neighbors(): # number of neighbors of each particle
+def calc_neighbors():  # number of neighbors of each particle
     for i in range(N):
         neighbors[i] = 0
-    
+
     for i in range(N):
         for j in range(i + 1, N):
             r = (pos[j] - pos[i]).norm()
@@ -332,7 +319,7 @@ def plot_average_neighbors_over_time():
 
 def plot_neighbor_distribution_over_time():
     plt.figure(figsize=(10, 6))
-    
+
     # Plot each neighbor count over time
     for i in range(7):
         plt.plot(neighbor_count_over_time[i], label=f"Particles with {i} neighbors", linewidth=2)
@@ -346,7 +333,6 @@ def plot_neighbor_distribution_over_time():
     plt.show()
 
 def plot():
-
     import matplotlib.pyplot as plt
 
     positions = np.linspace(0, 1, 500)
@@ -400,10 +386,8 @@ def plot():
     plt.title("2D Colormap of Force Magnitude from Superpositions")
     plt.show()
 
-
 c = 0
 def plot_radial_distribution():
-
     import matplotlib.pyplot as plt
     global c
 
@@ -412,14 +396,14 @@ def plot_radial_distribution():
     rs = np.linspace(0, 0.1, 500)
     gs = np.zeros_like(rs)
     mid = sum(positions) / N
-    
+
     plt.figure(figsize=(10, 6))
     for j in range(N):
         distance = np.linalg.norm(positions[j] - mid)
         for i, r in enumerate(rs):
             contribution = np.sqrt(max(0., 1. - (distance - r)**2 / particle_radius[j]**2))
             gs[i] += contribution
-    
+
     plt.plot(rs, gs, label="Radial Distribution Function", color="black", linewidth=2, linestyle="--")
     plt.xlabel("Distance from Center")
     plt.ylabel("Radial Distribution")
@@ -428,7 +412,6 @@ def plot_radial_distribution():
     plt.savefig(f"radial_distribution_{c}.png")
     c += 1
 
-
 if len(sys.argv) > 1 and sys.argv[1] == "plot":
     plot()
     exit()
@@ -436,7 +419,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "plot":
 # start the simulation
 d = 1.5 * particle_radius_max  # Set the distance threshold for clustering
 
-gui = ti.GUI("Bulk Acoustic 2D Simulation", (res, res)) # create a window of resolution 512*512
+gui = ti.GUI("Bulk Acoustic 2D Simulation", (res, res))  # create a window of resolution 512*512
 
 initialize_cluster()
 
@@ -474,9 +457,9 @@ def adjust_brightness(color, factor):
 
     return (r << 16) + (g << 8) + b
 
-while gui.running: # update frames, intervel is time step h
+while gui.running:  # update frames, interval is time step h
 
-    for e in gui.get_events(ti.GUI.PRESS): #event processing
+    for e in gui.get_events(ti.GUI.PRESS):  # event processing
         if e.key == ti.GUI.ESCAPE:
             exit()
         elif e.key == "r":
@@ -499,9 +482,9 @@ while gui.running: # update frames, intervel is time step h
             plot_radial_distribution()
             plot_average_neighbors_over_time()  # Plot the average number of neighbors
             plot_neighbor_distribution_over_time()  # Plot the neighbor distribution over time
-    
+
     if not paused[None]:
-        for i in range(substepping): # run substepping times for each time step
+        for i in range(substepping):  # run substepping times for each time step
             compute_force()
             collision_update()
             update()
@@ -532,14 +515,14 @@ while gui.running: # update frames, intervel is time step h
         # Count the number of particles in each cluster
         counts = np.bincount(assignments_unassigned.astype(np.int32), minlength=total_clusters_with_unassigned)
 
-    gui.clear(0x112F41) # Hex code of the color: 0x000000 = black, 0xffffff = white
+    gui.clear(0x112F41)  # Hex code of the color: 0x000000 = black, 0xffffff = white
 
     # Re-add the lines indicating pressure minima
     lines_start = np.zeros((kx[0] + ky[0], 2))
     lines_end = np.ones((kx[0] + ky[0], 2))
     lines_start[:kx[0], 0] = lines_end[:kx[0], 0] = np.linspace(.5/kx[0], 1-.5/kx[0], kx[0])
     lines_start[kx[0]:, 1] = lines_end[kx[0]:, 1] = np.linspace(.5/ky[0], 1-.5/ky[0], ky[0])
-    
+
     gui.lines(lines_start, lines_end, color=0x808080, radius=1.0)
 
     # Get the neighbors array
@@ -586,11 +569,27 @@ while gui.running: # update frames, intervel is time step h
     y_pos = start_y - (total_clusters) * spacing
     if y_pos >= 0.05:
         gui.text(cluster_text, pos=(start_x, y_pos), color=0xFFFFFF, font_size=16)
-        
+
+    # Add numbering labels to clusters
+    pos_np = pos.to_numpy()
+    for cluster_idx in range(total_clusters):
+        indices = np.where(assignments == cluster_idx)[0]
+        if len(indices) > 0:
+            cluster_positions = pos_np[indices]
+            centroid = np.mean(cluster_positions, axis=0)
+            # Ensure the label stays within bounds
+            centroid = np.clip(centroid, 0.05, 0.95)
+            gui.text(
+                str(cluster_idx + 1),
+                pos=(centroid[0], centroid[1]),
+                color=0xFFFFFF,
+                font_size=20,
+            )
+
     gui.text(message, pos=(0.05, 0.99), color=0xFFFFFF, font_size=20)
     # pos=(x, y) coordinates range from (0,0) bottom-left to (1,1) top-right
 
     gui.text(f"Number of clusters: {total_clusters}", pos=(0.05, 0.05), color=0xFFFFFF, font_size=20)
-    
+
     gui.fps_limit = 30
     gui.show()
