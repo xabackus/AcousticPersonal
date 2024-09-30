@@ -3,9 +3,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import taichi as ti
-
 import sys
-
 import math
 
 # Define maximum clusters
@@ -206,6 +204,80 @@ def compute_energy():
 
 
 neighbors = ti.field(ti.i32, N)
+particle_node_assignments = ti.field(ti.i32, N)
+
+# Clustering Logic
+@ti.kernel
+def calculate_neighbors_and_init_clusters(d: float):
+    for i in range(N):
+        neighbors[i] = 0  # Reset neighbors count
+        particle_node_assignments[i] = -1  # Reset cluster assignments (no cluster yet)
+
+    for i in range(N):
+        for j in range(i + 1, N):
+            r = (pos[j] - pos[i]).norm()
+            if r < particle_radius[i] + particle_radius[j] + 2e-3:  # Detect touching particles
+                neighbors[i] += 1
+                neighbors[j] += 1
+
+@ti.kernel
+def assign_clusters(d: float):
+    cluster_id[None] = 0
+    for i in range(N):
+        if neighbors[i] >= 2 and particle_node_assignments[i] == -1:  # Step 1: Start a new cluster
+            particle_node_assignments[i] = cluster_id[None]
+            expand_cluster(cluster_id[None], i, d)  # Step 2: Expand the cluster
+            cluster_id[None] += 1  # Increment cluster ID for the next cluster
+
+# Define stack size
+MAX_STACK_SIZE = 1000  # Set this large enough to hold the maximum number of particles you expect in a cluster
+
+# Define the stack using Taichi fields
+stack = ti.field(dtype=ti.i32, shape=MAX_STACK_SIZE)  # Stack to hold particle indices
+stack_pointer = ti.field(dtype=ti.i32, shape=())  # Stack pointer
+
+@ti.func
+def push(val: int):
+    stack[stack_pointer[None]] = val
+    stack_pointer[None] += 1
+
+@ti.func
+def pop() -> int:
+    stack_pointer[None] -= 1
+    return stack[stack_pointer[None]]
+
+@ti.func
+def stack_empty() -> bool:
+    return stack_pointer[None] == 0
+
+@ti.func
+def expand_cluster(cluster_id: int, particle_id: int, d: float):
+    stack_pointer[None] = 0  # Initialize stack pointer
+    push(particle_id)  # Push the initial particle onto the stack
+    particle_node_assignments[particle_id] = cluster_id  # Assign starting particle to the cluster
+
+    while not stack_empty():  # Loop while there are particles in the stack
+        current_particle = pop()  # Take the top particle from the stack
+
+        # Recursively add touching particles to the cluster
+        for j in range(N):
+            if particle_node_assignments[j] == -1:  # Unassigned particle
+                r = (pos[j] - pos[current_particle]).norm()
+                if r < particle_radius[current_particle] + particle_radius[j] + 2e-3:
+                    particle_node_assignments[j] = cluster_id  # Add to the cluster
+                    push(j)  # Add this particle to the stack for further exploration
+
+        # Add particles within distance 'd'
+        for j in range(N):
+            if particle_node_assignments[j] == -1:  # Unassigned particle
+                r = (pos[j] - current_particle).norm()
+                if r < d:  # Check if within distance d
+                    particle_node_assignments[j] = cluster_id
+                    push(j)  # Add this particle to the stack for further exploration
+
+def run_clustering(d: float):
+    calculate_neighbors_and_init_clusters(d)
+    assign_clusters(d)
 
 # Create a list to store the average number of neighbors over time
 average_neighbors_over_time = []
@@ -247,7 +319,6 @@ def update_neighbor_count_over_time():
     counts = neighbor_counts_field.to_numpy()  # Convert the Taichi field to a NumPy array
     for i in range(7):
         neighbor_count_over_time[i].append(counts[i])  # Append the counts to the Python list
-
 
 def plot_average_neighbors_over_time():
     plt.figure(figsize=(10, 6))
@@ -363,6 +434,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "plot":
     exit()
 
 # start the simulation
+d = 1.5 * particle_radius_max  # Set the distance threshold for clustering
+
 gui = ti.GUI("Bulk Acoustic 2D Simulation", (res, res)) # create a window of resolution 512*512
 
 initialize_cluster()
@@ -370,37 +443,25 @@ initialize_cluster()
 xchanging = True
 message = "Changing number of nodes along X-axis"
 
-# Initialize node_positions with MAX_CLUSTERS
-node_positions = ti.Vector.field(2, ti.f32, MAX_CLUSTERS)  # Node positions grid
-particle_node_assignments = ti.field(ti.i32, N)  # Store which node each particle is assigned to
+# Declare cluster_id as a Taichi field
+cluster_id = ti.field(dtype=ti.i32, shape=())
 
-@ti.kernel
-def assign_particles_to_clusters():
-    # Step 1: Create the node grid positions
-    index = 0
-    for i in range(min(kx_field[0], MAX_KX)):  # Ensure i doesn't exceed MAX_KX
-        for j in range(min(ky_field[0], MAX_KY)):  # Ensure j doesn't exceed MAX_KY
-            node_x = (i + 0.5) / kx_field[0]  # Uniformly space nodes in x
-            node_y = (j + 0.5) / ky_field[0]  # Uniformly space nodes in y
-            if index < MAX_CLUSTERS:
-                node_positions[index] = ti.Vector([node_x, node_y])
-                index += 1
-
-    # Step 2: Assign each particle to the closest node
-    for i in range(N):
-        min_dist = float('inf')
-        closest_node = 0
-
-        for node in range(min(kx_field[0] * ky_field[0], MAX_CLUSTERS)):
-            dist = (pos[i] - node_positions[node]).norm()  # Calculate distance between particle and node
-            if dist < min_dist:
-                min_dist = dist
-                closest_node = node
-
-        # Step 3: Assign particle to the closest node
-        particle_node_assignments[i] = closest_node
-
-total_clusters = kx[0] * ky[0]
+# Initialize variables for plotting clusters
+colors = [
+    0xFF0000,  # Red
+    0x00FF00,  # Green
+    0x0000FF,  # Blue
+    0xFFFF00,  # Yellow
+    0xFF00FF,  # Magenta
+    0x00FFFF,  # Cyan
+    0xFFFFFF,  # White
+    0xFFA500,  # Orange
+    0x800080,  # Purple
+    0x00FF7F,  # Spring Green
+    0x808000,  # Olive
+    0x008080,  # Teal
+    0x000000,  # Black
+]
 
 while gui.running: # update frames, intervel is time step h
 
@@ -437,81 +498,79 @@ while gui.running: # update frames, intervel is time step h
             vel.copy_from(vel_p1)
             compute_energy()
             calc_neighbors()
-            assign_particles_to_clusters()
+            run_clustering(d)  # Run the new clustering algorithm
             update_average_neighbors()
             update_neighbor_count_over_time()  # Update the neighbor count data for plotting
             # print("Current energy = {}, Initial energy = {}, Ratio = {}".format(energy[1],energy[0],energy[1]/energy[0]))
 
-        # Step 4: Assign particles to clusters
+        total_clusters = cluster_id[None]
 
         # Convert Taichi field to NumPy array
         assignments = particle_node_assignments.to_numpy()
 
-        # Calculate the total number of clusters
-        total_clusters = kx[0] * ky[0]
+        # Create a mask for unassigned particles
+        unassigned_mask = assignments == -1
+
+        # For unassigned particles, set their cluster ID to 'total_clusters' (the next integer)
+        assignments_unassigned = assignments.copy()
+        assignments_unassigned[unassigned_mask] = total_clusters
+
+        # Now, total number of clusters including the unassigned cluster is 'total_clusters + 1'
+        total_clusters_with_unassigned = total_clusters + 1
 
         # Count the number of particles in each cluster
-        counts = np.bincount(assignments, minlength=total_clusters)
+        counts = np.bincount(assignments_unassigned.astype(np.int32), minlength=total_clusters_with_unassigned)
 
     gui.clear(0x112F41) # Hex code of the color: 0x000000 = black, 0xffffff = white
 
-    lines_start = np.zeros((kx[0] + ky[0], 2))
-    lines_end = np.ones((kx[0] + ky[0], 2))
-    lines_start[:kx[0], 0] = lines_end[:kx[0], 0] = np.linspace(.5/kx[0], 1-.5/kx[0], kx[0])
-    lines_start[kx[0]:, 1] = lines_end[kx[0]:, 1] = np.linspace(.5/ky[0], 1-.5/ky[0], ky[0])
+    # Optionally, draw grid lines if needed
+    # lines_start = np.zeros((kx[0] + ky[0], 2))
+    # lines_end = np.ones((kx[0] + ky[0], 2))
+    # lines_start[:kx[0], 0] = lines_end[:kx[0], 0] = np.linspace(.5/kx[0], 1-.5/kx[0], kx[0])
+    # lines_start[kx[0]:, 1] = lines_end[kx[0]:, 1] = np.linspace(.5/ky[0], 1-.5/ky[0], ky[0])
     
-    gui.lines(lines_start, lines_end, color=0x808080, radius=1.0)
+    # gui.lines(lines_start, lines_end, color=0x808080, radius=1.0)
+
+    assignments = particle_node_assignments.to_numpy()
+    num_colors = len(colors)
 
     for i in range(N):
         pos_1[0] = pos[i]
-        h = min(neighbors[i] / 6, 1)
+
+        cluster_id_i = assignments[i]
+        if cluster_id_i == -1:
+            color = 0x808080  # Gray for unassigned particles
+        else:
+            color = colors[cluster_id_i % num_colors]
+
         gui.circles(pos_1.to_numpy(), \
-            color = int( ti.rgb_to_hex((h, h, h)) ), \
-            radius = particle_radius[i] * float(res))
-    
-    # Convert node_positions to a NumPy array for easy iteration
-    node_positions_np = node_positions.to_numpy()
+            color=color, \
+            radius=particle_radius[i] * float(res))
 
-    # Iterate over each node and render its cluster number
-    for cluster_idx in range(total_clusters):
-        node_pos = node_positions_np[cluster_idx]
-
-        # Define the position for the text slightly above the node
-        # Adjust the offset as needed (e.g., 0.02 units upwards)
-        text_pos = (node_pos[0], node_pos[1] + 0.02)
-
-        # Ensure the text does not go out of bounds
-        text_pos = (
-            min(max(text_pos[0], 0.0), 1.0),
-            min(max(text_pos[1], 0.0), 1.0),
-        )
-
-        # Render the cluster number. Convert cluster_idx to string.
-        gui.text(
-            str(cluster_idx + 1),  # +1 for 1-based indexing
-            pos=text_pos,
-            color=0xFFFFFF,  # White color for visibility
-            font_size=16,
-        )
-        
     # Define starting position and spacing
-    start_x = 0.05  # Position near the right edge
+    start_x = 0.05  # Position near the left edge
     start_y = 0.95  # Start near the top
     spacing = 0.03   # Vertical spacing between lines
 
     # Iterate over each cluster and display its count
-    for cluster_idx, count in enumerate(counts):
-        cluster_text = f"Cluster {cluster_idx + 1}: {count} particles"
+    for cluster_idx in range(total_clusters):
+        cluster_text = f"Cluster {cluster_idx + 1}: {counts[cluster_idx]} particles"
         y_pos = start_y - cluster_idx * spacing
         # Ensure that text doesn't go below the bottom of the screen
         if y_pos < 0.05:
             break
         gui.text(cluster_text, pos=(start_x, y_pos), color=0xFFFFFF, font_size=16)
+
+    # Display the unassigned particles
+    cluster_text = f"Unassigned: {counts[total_clusters]} particles"
+    y_pos = start_y - (total_clusters) * spacing
+    if y_pos >= 0.05:
+        gui.text(cluster_text, pos=(start_x, y_pos), color=0xFFFFFF, font_size=16)
         
     gui.text(message, pos=(0.05, 0.99), color=0xFFFFFF, font_size=20)
     # pos=(x, y) coordinates range from (0,0) bottom-left to (1,1) top-right
 
-    gui.text(f"Number of groups = {total_clusters}", pos=(0.05, 0.15), color=0xFFFFFF, font_size=20)
+    gui.text(f"Number of clusters: {total_clusters}", pos=(0.05, 0.05), color=0xFFFFFF, font_size=20)
     
     gui.fps_limit = 30
     gui.show()
