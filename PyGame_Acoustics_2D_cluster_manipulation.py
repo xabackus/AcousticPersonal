@@ -1,6 +1,8 @@
 import numpy as np
 import pygame
 import sys
+import math
+import matplotlib.pyplot as plt
 
 # Constants and Initialization
 PI = 3.1415926
@@ -297,6 +299,78 @@ def update_neighbor_count_over_time():
     for i in range(7):
         neighbor_count_over_time[i].append(counts[i])
 
+# Plotting functions using Matplotlib
+def plot_average_neighbors_over_time():
+    plt.figure(figsize=(10, 6))
+    plt.plot(average_neighbors_over_time, label="Average Neighbors Over Time", color="blue", linewidth=2)
+    
+    # Add vertical lines at key_press_time_steps
+    for idx, step in enumerate(key_press_time_steps):
+        plt.axvline(x=step, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
+    
+    plt.xlabel("Time Step")
+    plt.ylabel("Average Number of Neighbors")
+    plt.title("Average Neighbors Over Time")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.001)  # Allow the plot to update without blocking
+
+def plot_neighbor_distribution_over_time():
+    plt.figure(figsize=(10, 6))
+    
+    # Number of neighbor categories
+    max_neighbors = 6
+    
+    # Convert the neighbor_count_over_time to a numpy array for easier manipulation
+    neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(7)])
+    
+    # Compute cumulative counts along the time axis (axis=0)
+    cumulative_counts = np.cumsum(neighbor_counts_array, axis=0)
+    
+    # Plot each cumulative count
+    for i in range(max_neighbors + 1):
+        plt.plot(cumulative_counts[i], label=f"Up to {i} neighbors", linewidth=2)
+    
+    # Add vertical lines at key_press_time_steps
+    for idx, step in enumerate(key_press_time_steps):
+        plt.axvline(x=step, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
+    
+    plt.xlabel("Time Step")
+    plt.ylabel("Number of Particles")
+    plt.title("Cumulative Neighbor Distribution Over Time")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.001)  # Allow the plot to update without blocking
+
+def plot_radial_distribution():
+    plt.figure(figsize=(10, 6))
+    positions = pos.copy()
+    rs = np.linspace(0, np.sqrt(2), 500)
+    gs = np.zeros_like(rs)
+    mid = np.mean(positions, axis=0)
+
+    for j in range(N):
+        distance = np.linalg.norm(positions[j] - mid)
+        for i, r in enumerate(rs):
+            if particle_radius[j] == 0:
+                continue  # Avoid division by zero
+            contribution = np.sqrt(max(0., 1. - ((distance - r) ** 2) / (particle_radius[j] ** 2)))
+            gs[i] += contribution
+
+    plt.plot(rs, gs, label="Radial Distribution Function", color="black", linewidth=2, linestyle="--")
+    plt.xlabel("Distance from Center")
+    plt.ylabel("Radial Distribution")
+    plt.title("Radial Distribution Function")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.001)  # Allow the plot to update without blocking
+
 # Initialize the simulation
 initialize_cluster()
 xchanging = True
@@ -350,7 +424,7 @@ neighbor_colors = [
     (139, 0, 255),  # Purple for 6 neighbors
 ]
 
-neighbor_labels = ["6", "5", "4", "3", "2", "1", "0"]
+neighbor_labels = ["0", "1", "2", "3", "4", "5", "6"]
 
 # Main simulation loop
 d = 1.5 * particle_radius_max  # Set the distance threshold for clustering
@@ -380,6 +454,11 @@ while running:
             elif event.key == pygame.K_y:
                 xchanging = False
                 message = "Changing number of nodes along Y-axis"
+            elif event.key == pygame.K_g:
+                # Plot graphs using Matplotlib
+                plot_average_neighbors_over_time()
+                plot_neighbor_distribution_over_time()
+                plot_radial_distribution()
 
     if not paused:
         for _ in range(substepping):
@@ -487,6 +566,12 @@ while running:
     if y_pos + spacing <= text_area_rect.bottom:
         num_clusters_surface = font.render(f"Number of Clusters: {total_clusters}", True, (255, 255, 255))
         window.blit(num_clusters_surface, (start_x, y_pos))
+        y_pos += spacing
+
+    # Display whether changing X or Y
+    if y_pos + spacing <= text_area_rect.bottom:
+        changing_axis_surface = font.render(f"Changing Axis: {'X' if xchanging else 'Y'}", True, (255, 255, 255))
+        window.blit(changing_axis_surface, (start_x, y_pos))
         y_pos += spacing
 
     # Draw Average Neighbors Over Time Graph
