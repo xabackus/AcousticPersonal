@@ -1,30 +1,37 @@
 import numpy as np
 import pygame
 import sys
-import math
-import matplotlib.pyplot as plt
 
 # Constants and Initialization
 PI = 3.1415926
-res = 512
-dashboard_height = 200  # Height for the dashboard area
+res = 512  # Simulation area size (512x512 pixels)
+dashboard_width = 400  # Width for each dashboard area
+
+# Define dashboard heights
+text_dashboard_height = 300  # Height for the text dashboard
+average_graph_height = 200    # Height for the average neighbors graph
+cumulative_graph_height = 200 # Height for the cumulative neighbor proportions graph
+
+# Calculate window dimensions
+window_width = res + dashboard_width
+window_height = max(res, text_dashboard_height + average_graph_height + cumulative_graph_height)
 
 # Pygame Initialization
 pygame.init()
-window = pygame.display.set_mode((res, res + dashboard_height))
-pygame.display.set_caption("Bulk Acoustic 2D Simulation with Dashboard")
+window = pygame.display.set_mode((window_width, window_height))
+pygame.display.set_caption("Bulk Acoustic 2D Simulation with Dashboards")
 clock = pygame.time.Clock()
 
 # Simulation Parameters
 paused = False
-N = 61  # number of particles
-particle_m_max = 5.0  # mass
-nest_size = 0.6  # nest size
-particle_radius_max = 10.0 / float(res)  # particle radius for rendering (~0.0195)
-init_vel = 100  # initial velocity
+N = 61  # Number of particles
+particle_m_max = 5.0  # Mass
+nest_size = 0.6  # Nest size
+particle_radius_max = 10.0 / float(res)  # Particle radius for rendering (~0.0195)
+init_vel = 100  # Initial velocity
 
-h = 1e-5  # time step
-substepping = 3  # the number of sub-iterations within a time step
+h = 1e-5  # Time step
+substepping = 3  # Number of sub-iterations within a time step
 
 # Fields
 pos = np.zeros((N, 2), dtype=np.float32)
@@ -38,7 +45,7 @@ energy = np.zeros(2, dtype=np.float32)  # [1] current energy [0] initial energy
 particle_color = np.zeros((N, 3), dtype=np.float32)
 
 # Acoustic properties
-po = 10e6  # acoustic pressure
+po = 10e6  # Acoustic pressure
 
 ax = np.array([1.0])
 ay = np.array([1.0])
@@ -290,82 +297,6 @@ def update_neighbor_count_over_time():
     for i in range(7):
         neighbor_count_over_time[i].append(counts[i])
 
-# Plotting functions
-c = 0  # Initialize counter for plot filenames
-
-def plot_average_neighbors_over_time():
-    global c
-    plt.figure(figsize=(10, 6))
-    plt.plot(average_neighbors_over_time, label="Average Neighbors Over Time", color="blue", linewidth=2)
-    
-    # Add vertical lines at key_press_time_steps
-    for idx, step in enumerate(key_press_time_steps):
-        plt.axvline(x=step, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-    
-    plt.xlabel("Time Step")
-    plt.ylabel("Average Number of Neighbors")
-    plt.title("Average Neighbors Over Time")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(f"average_neighbors_{c}.png")
-    plt.show()
-    c += 1
-
-def plot_neighbor_distribution_over_time():
-    global c
-    plt.figure(figsize=(10, 6))
-    
-    # Number of neighbor categories
-    max_neighbors = 6
-    
-    # Convert the neighbor_count_over_time to a numpy array for easier manipulation
-    neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(max_neighbors + 1)])
-    
-    # Compute cumulative counts along the time axis (axis=0)
-    cumulative_counts = np.cumsum(neighbor_counts_array, axis=0)
-    
-    # Plot each cumulative count
-    for i in range(max_neighbors + 1):
-        plt.plot(cumulative_counts[i], label=f"Up to {i} neighbors", linewidth=2)
-    
-    # Add vertical lines at key_press_time_steps
-    for idx, step in enumerate(key_press_time_steps):
-        plt.axvline(x=step, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-    
-    plt.xlabel("Time Step")
-    plt.ylabel("Number of Particles")
-    plt.title("Cumulative Neighbor Distribution Over Time")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(f"cumulative_neighbor_distribution_{c}.png")
-    plt.show()
-    c += 1
-
-def plot_radial_distribution():
-    global c
-    positions = pos.copy()
-    rs = np.linspace(0, np.sqrt(2), 500)
-    gs = np.zeros_like(rs)
-    mid = np.mean(positions, axis=0)
-
-    plt.figure(figsize=(10, 6))
-    for j in range(N):
-        distance = np.linalg.norm(positions[j] - mid)
-        for i, r in enumerate(rs):
-            if particle_radius[j] == 0:
-                continue  # Avoid division by zero
-            contribution = np.sqrt(max(0., 1. - ((distance - r) ** 2) / (particle_radius[j] ** 2)))
-            gs[i] += contribution
-
-    plt.plot(rs, gs, label="Radial Distribution Function", color="black", linewidth=2, linestyle="--")
-    plt.xlabel("Distance from Center")
-    plt.ylabel("Radial Distribution")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(f"radial_distribution_{c}.png")
-    plt.show()
-    c += 1
-
 # Initialize the simulation
 initialize_cluster()
 xchanging = True
@@ -403,6 +334,24 @@ def adjust_brightness(color, factor):
 pygame.font.init()
 font = pygame.font.SysFont('Arial', 16)
 
+# Define dashboard areas
+text_area_rect = pygame.Rect(res, 0, dashboard_width, text_dashboard_height)
+average_graph_rect = pygame.Rect(res, text_dashboard_height, dashboard_width, average_graph_height)
+cumulative_graph_rect = pygame.Rect(res, text_dashboard_height + average_graph_height, dashboard_width, cumulative_graph_height)
+
+# Colors for neighbor counts in cumulative graph
+neighbor_colors = [
+    (255, 0, 0),    # Red for 0 neighbors
+    (255, 165, 0),  # Orange for 1 neighbor
+    (255, 255, 0),  # Yellow for 2 neighbors
+    (0, 255, 0),    # Green for 3 neighbors
+    (0, 127, 255),  # Light blue for 4 neighbors
+    (0, 0, 255),    # Blue for 5 neighbors
+    (139, 0, 255),  # Purple for 6 neighbors
+]
+
+neighbor_labels = ["6", "5", "4", "3", "2", "1", "0"]
+
 # Main simulation loop
 d = 1.5 * particle_radius_max  # Set the distance threshold for clustering
 running = True
@@ -431,10 +380,6 @@ while running:
             elif event.key == pygame.K_y:
                 xchanging = False
                 message = "Changing number of nodes along Y-axis"
-            elif event.key == pygame.K_g:
-                plot_radial_distribution()
-                plot_average_neighbors_over_time()
-                plot_neighbor_distribution_over_time()
 
     if not paused:
         for _ in range(substepping):
@@ -500,32 +445,139 @@ while running:
         radius = int(max(particle_radius[i] * res, 2))  # Minimum radius of 2 pixels for visibility
         pygame.draw.circle(window, color, screen_pos, radius)
 
-    # Draw dashboard background
-    dashboard_rect = pygame.Rect(0, res, res, dashboard_height)
-    pygame.draw.rect(window, (30, 30, 30), dashboard_rect)  # Dark gray background for dashboard
+    # Draw Text Dashboard
+    pygame.draw.rect(window, (30, 30, 30), text_area_rect)  # Background for text area
 
-    # Display cluster information on dashboard
-    start_x = 10
-    start_y = res + 10  # Starting y position for dashboard text
+    # Display cluster information
+    start_x = text_area_rect.left + 10
+    start_y = text_area_rect.top + 10  # Starting y position for text
     spacing = 20  # Spacing between lines
 
     # Render cluster information
+    y_pos = start_y
     for cluster_idx in range(total_clusters):
         cluster_text = f"Cluster {cluster_idx + 1}: {counts[cluster_idx]} particles"
-        y_pos = start_y + cluster_idx * spacing
-        if y_pos + spacing > res + dashboard_height:
+        if y_pos + spacing > text_area_rect.bottom:
             break
         text_surface = font.render(cluster_text, True, (255, 255, 255))
         window.blit(text_surface, (start_x, y_pos))
+        y_pos += spacing
 
     # Display unassigned particles
-    cluster_text = f"Unassigned: {counts[total_clusters]} particles"
-    y_pos = start_y + total_clusters * spacing
-    if y_pos + spacing <= res + dashboard_height:
+    if y_pos + spacing <= text_area_rect.bottom:
+        cluster_text = f"Unassigned: {counts[total_clusters]} particles"
         text_surface = font.render(cluster_text, True, (255, 255, 255))
         window.blit(text_surface, (start_x, y_pos))
+        y_pos += spacing
 
-    # Add numbering labels to clusters
+    # Display messages
+    if y_pos + spacing <= text_area_rect.bottom:
+        message_surface = font.render(message, True, (255, 255, 255))
+        window.blit(message_surface, (start_x, y_pos))
+        y_pos += spacing
+
+    # Display average neighbors
+    if y_pos + spacing <= text_area_rect.bottom:
+        avg_neighbors = average_neighbors_over_time[-1] if average_neighbors_over_time else 0
+        avg_neighbors_surface = font.render(f"Average Neighbors: {avg_neighbors:.2f}", True, (255, 255, 255))
+        window.blit(avg_neighbors_surface, (start_x, y_pos))
+        y_pos += spacing
+
+    # Display number of clusters
+    if y_pos + spacing <= text_area_rect.bottom:
+        num_clusters_surface = font.render(f"Number of Clusters: {total_clusters}", True, (255, 255, 255))
+        window.blit(num_clusters_surface, (start_x, y_pos))
+        y_pos += spacing
+
+    # Draw Average Neighbors Over Time Graph
+    pygame.draw.rect(window, (30, 30, 30), average_graph_rect)  # Background for graph area
+    data = average_neighbors_over_time
+    data_length = len(data)
+    max_data_points = average_graph_rect.width  # Number of pixels in x-direction
+
+    if data_length > max_data_points:
+        data_to_plot = data[-max_data_points:]
+    else:
+        data_to_plot = data
+
+    x_scale = average_graph_rect.width / max_data_points
+    y_min = 0
+    y_max = 6
+    y_range = y_max - y_min
+    y_scale = (average_graph_rect.height - 40) / y_range  # Leave space for labels
+
+    points = []
+
+    for i, value in enumerate(data_to_plot):
+        x = average_graph_rect.left + i * x_scale
+        y = average_graph_rect.bottom - 20 - (value - y_min) * y_scale
+        points.append((x, y))
+
+    if len(points) >= 2:
+        pygame.draw.lines(window, (0, 255, 0), False, points, 2)  # Green line
+
+    # Draw labels and axes for average neighbors graph
+    text_surface = font.render("Average Neighbors Over Time", True, (255, 255, 255))
+    window.blit(text_surface, (average_graph_rect.left + 10, average_graph_rect.top + 10))
+
+    # Draw y-axis labels
+    for i in range(int(y_min), int(y_max) + 1):
+        y = average_graph_rect.bottom - 20 - (i - y_min) * y_scale
+        label_surface = font.render(str(i), True, (255, 255, 255))
+        window.blit(label_surface, (average_graph_rect.left + 5, y - 8))
+        pygame.draw.line(window, (100, 100, 100), (average_graph_rect.left + 30, y), (average_graph_rect.right, y), 1)
+
+    # Draw Cumulative Neighbor Proportions Graph
+    pygame.draw.rect(window, (30, 30, 30), cumulative_graph_rect)  # Background for graph area
+    neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(7)])
+    data_length = neighbor_counts_array.shape[1]
+
+    max_data_points = cumulative_graph_rect.width  # Number of pixels in x-direction
+
+    if data_length > max_data_points:
+        neighbor_counts_array = neighbor_counts_array[:, -max_data_points:]
+        data_length = max_data_points
+
+    cumulative_counts_array = np.cumsum(neighbor_counts_array, axis=0)
+    cumulative_proportions_array = cumulative_counts_array / N  # Convert to proportions
+
+    x_scale = cumulative_graph_rect.width / max_data_points
+    y_scale = (cumulative_graph_rect.height - 40)  # Leave space for labels
+
+    # Draw cumulative proportions for each neighbor count
+    for neighbor in range(6, -1, -1):  # Draw from 6 to 0 neighbors
+        data = cumulative_proportions_array[neighbor]
+        points = []
+        for i, value in enumerate(data):
+            x = cumulative_graph_rect.left + i * x_scale
+            y = cumulative_graph_rect.bottom - 20 - value * y_scale
+            points.append((x, y))
+        if len(points) >= 2:
+            pygame.draw.lines(window, neighbor_colors[neighbor], False, points, 2)
+
+    # Draw labels and axes for cumulative neighbor proportions graph
+    text_surface = font.render("Cumulative Neighbor Proportions Over Time", True, (255, 255, 255))
+    window.blit(text_surface, (cumulative_graph_rect.left + 10, cumulative_graph_rect.top + 10))
+
+    # Draw legend for cumulative graph
+    legend_y = cumulative_graph_rect.top + 30
+    legend_x = cumulative_graph_rect.left + 10
+    for neighbor in range(7):
+        color = neighbor_colors[neighbor]
+        label = neighbor_labels[neighbor]
+        pygame.draw.line(window, color, (legend_x, legend_y), (legend_x + 20, legend_y), 2)
+        label_surface = font.render(f"Neighbors = {label}", True, (255, 255, 255))
+        window.blit(label_surface, (legend_x + 25, legend_y - 8))
+        legend_y += 20
+
+    # Draw y-axis labels (0% to 100%) for cumulative graph
+    for i in range(0, 101, 20):
+        y = cumulative_graph_rect.bottom - 20 - (i / 100) * y_scale
+        label_surface = font.render(f"{i}%", True, (255, 255, 255))
+        window.blit(label_surface, (cumulative_graph_rect.left + 5, y - 8))
+        pygame.draw.line(window, (100, 100, 100), (cumulative_graph_rect.left + 30, y), (cumulative_graph_rect.right, y), 1)
+
+    # Draw numbering labels to clusters on the simulation area
     pos_np = pos.copy()
     for cluster_idx in range(total_clusters):
         indices = np.where(assignments == cluster_idx)[0]
@@ -536,13 +588,6 @@ while running:
             text_surface = font.render(str(cluster_idx + 1), True, (255, 255, 255))
             screen_pos = (int(centroid[0] * res), int(centroid[1] * res))
             window.blit(text_surface, screen_pos)
-
-    # Display messages on dashboard
-    message_surface = font.render(message, True, (255, 255, 255))
-    window.blit(message_surface, (start_x, res + dashboard_height - 30))  # Positioned at the bottom of dashboard
-
-    number_of_clusters_surface = font.render(f"Number of clusters: {total_clusters}", True, (255, 255, 255))
-    window.blit(number_of_clusters_surface, (start_x, res + dashboard_height - 60))  # Positioned above the message
 
     pygame.display.flip()
     clock.tick(30)  # Limit to 30 FPS
