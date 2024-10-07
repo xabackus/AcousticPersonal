@@ -568,12 +568,6 @@ while running:
         window.blit(num_clusters_surface, (start_x, y_pos))
         y_pos += spacing
 
-    # Display whether changing X or Y
-    if y_pos + spacing <= text_area_rect.bottom:
-        changing_axis_surface = font.render(f"Changing Axis: {'X' if xchanging else 'Y'}", True, (255, 255, 255))
-        window.blit(changing_axis_surface, (start_x, y_pos))
-        y_pos += spacing
-
     # Draw Average Neighbors Over Time Graph
     pygame.draw.rect(window, (30, 30, 30), average_graph_rect)  # Background for graph area
     data = average_neighbors_over_time
