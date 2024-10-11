@@ -74,7 +74,8 @@ cluster_id = 0
 average_neighbors_over_time = []
 neighbor_count_over_time = {i: [] for i in range(7)}
 neighbor_counts_field = np.zeros(7, dtype=np.int32)
-weighted_avg_density_over_time = []  # New list to store weighted average cluster density over time
+weighted_avg_density_over_time = []  # List to store weighted average cluster density over time
+weighted_avg_aspect_ratio_over_time = []  # List to store weighted average aspect ratio over time
 
 # Initialize key press tracking variables
 key_press_data_indices = []  # Stores data indices when number keys are pressed
@@ -339,6 +340,47 @@ def calculate_weighted_avg_density():
         weighted_avg_density = 0.0  # No clusters, density is zero
     weighted_avg_density_over_time.append(weighted_avg_density)
 
+def calculate_aspect_ratios():
+    global weighted_avg_aspect_ratio_over_time
+    total_weighted_aspect_ratio = 0.0
+    total_particles_in_clusters = 0
+    cluster_aspect_ratios = {}
+
+    for cluster_idx in range(cluster_id):
+        indices = np.where(particle_node_assignments == cluster_idx)[0]
+        num_particles_in_cluster = len(indices)
+        if num_particles_in_cluster > 1:
+            # Get positions of particles in the cluster
+            cluster_positions = pos[indices]
+            # Compute covariance matrix
+            covariance_matrix = np.cov(cluster_positions.T)
+            # Compute eigenvalues
+            eigenvalues, _ = np.linalg.eig(covariance_matrix)
+            # Sort eigenvalues
+            sorted_eigenvalues = np.sort(eigenvalues)
+            # Avoid division by zero
+            if sorted_eigenvalues[0] == 0:
+                aspect_ratio = np.inf  # Set to infinity if division by zero
+            else:
+                aspect_ratio = np.sqrt(sorted_eigenvalues[-1] / sorted_eigenvalues[0])
+            cluster_aspect_ratios[cluster_idx] = aspect_ratio
+            # Weighted sum
+            total_weighted_aspect_ratio += aspect_ratio * num_particles_in_cluster
+            total_particles_in_clusters += num_particles_in_cluster
+        else:
+            # For clusters with only one particle, aspect ratio is 1
+            cluster_aspect_ratios[cluster_idx] = 1.0
+            total_weighted_aspect_ratio += 1.0 * num_particles_in_cluster
+            total_particles_in_clusters += num_particles_in_cluster
+
+    if total_particles_in_clusters > 0:
+        weighted_avg_aspect_ratio = total_weighted_aspect_ratio / total_particles_in_clusters
+    else:
+        weighted_avg_aspect_ratio = 0.0
+
+    weighted_avg_aspect_ratio_over_time.append(weighted_avg_aspect_ratio)
+    return cluster_aspect_ratios
+
 # Plotting functions using Matplotlib
 def plot_average_neighbors_over_time():
     plt.figure(figsize=(10, 6))
@@ -402,6 +444,23 @@ def plot_weighted_avg_density_over_time():
     plt.tight_layout()
     plt.show(block=False)
     plt.pause(0.001)  # Allow the plot to update without blocking
+
+def plot_weighted_avg_aspect_ratio_over_time():
+    plt.figure(figsize=(10, 6))
+    plt.plot(weighted_avg_aspect_ratio_over_time, label="Weighted Avg Aspect Ratio Over Time", color="orange", linewidth=2)
+    
+    # Add vertical lines at key_press_data_indices
+    for idx, data_index in enumerate(key_press_data_indices):
+        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
+    
+    plt.xlabel("Data Index")
+    plt.ylabel("Weighted Average Aspect Ratio")
+    plt.title("Weighted Average Aspect Ratio Over Time")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.001)
 
 # Initialize the simulation
 initialize_cluster()
@@ -491,6 +550,7 @@ while running:
                 plot_average_neighbors_over_time()
                 plot_neighbor_distribution_over_time()
                 plot_weighted_avg_density_over_time()
+                plot_weighted_avg_aspect_ratio_over_time()
                 # plot_radial_distribution()  # Commented out
 
     if not paused:
@@ -503,7 +563,8 @@ while running:
             run_clustering(d)
             update_average_neighbors()
             update_neighbor_count_over_time()
-            calculate_weighted_avg_density()  # New function to update density over time
+            calculate_weighted_avg_density()  # Update density over time
+            cluster_aspect_ratios = calculate_aspect_ratios()  # Calculate aspect ratios
 
         time_step += 1  # Increment the time step after each simulation step
 
@@ -569,7 +630,8 @@ while running:
     # Render cluster information
     y_pos = start_y
     for cluster_idx in range(total_clusters):
-        cluster_text = f"Cluster {cluster_idx + 1}: {counts[cluster_idx]} particles"
+        aspect_ratio = cluster_aspect_ratios.get(cluster_idx, 1.0)
+        cluster_text = f"Cluster {cluster_idx + 1}: {counts[cluster_idx]} particles; aspect ratio = {aspect_ratio:.2f}"
         if y_pos + spacing > text_area_rect.bottom:
             break
         text_surface = font.render(cluster_text, True, (255, 255, 255))
@@ -607,6 +669,13 @@ while running:
         weighted_avg_density = weighted_avg_density_over_time[-1] if weighted_avg_density_over_time else 0
         density_surface = font.render(f"Weighted Avg Cluster Density: {weighted_avg_density:.4f}", True, (255, 255, 255))
         window.blit(density_surface, (start_x, y_pos))
+        y_pos += spacing
+
+    # Display weighted average aspect ratio
+    if y_pos + spacing <= text_area_rect.bottom:
+        weighted_avg_aspect_ratio = weighted_avg_aspect_ratio_over_time[-1] if weighted_avg_aspect_ratio_over_time else 0
+        aspect_ratio_surface = font.render(f"Weighted Avg Aspect Ratio: {weighted_avg_aspect_ratio:.2f}", True, (255, 255, 255))
+        window.blit(aspect_ratio_surface, (start_x, y_pos))
         y_pos += spacing
 
     # Draw Average Neighbors Over Time Graph
