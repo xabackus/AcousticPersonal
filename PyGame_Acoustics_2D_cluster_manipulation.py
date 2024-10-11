@@ -76,7 +76,7 @@ neighbor_count_over_time = {i: [] for i in range(7)}
 neighbor_counts_field = np.zeros(7, dtype=np.int32)
 
 # Initialize key press tracking variables
-key_press_time_steps = []  # Stores time steps when number keys are pressed
+key_press_data_indices = []  # Stores data indices when number keys are pressed
 time_step = 0  # Tracks the current time step
 
 # Initialize particles randomly
@@ -144,6 +144,33 @@ def initialize_cluster():
         particle_color[i] = 0.3 + 0.7 * np.random.rand(3)
 
 # Compute forces acting on particles
+def compute_force():
+    # Clear forces
+    force[:, :] = 0.0
+
+    # Compute acoustic force
+    for i in range(N):
+        f_x = 0.0
+        f_y = 0.0
+
+        for wave in range(num_waves_x):
+            f_x += particle_radius[i]**3 * 1e6 * ax_field[wave] * np.sin(2 * PI * pos[i][0] * kx_field[wave])
+
+        for wave in range(num_waves_y):
+            f_y += particle_radius[i]**3 * 1e6 * ay_field[wave] * np.sin(2 * PI * pos[i][1] * ky_field[wave])
+
+        f_vector = np.array([f_x, f_y]) * po
+        force[i] += f_vector
+
+    # Force due to drag
+    for i in range(N):
+        f = -drag * particle_radius[i] * vel[i]
+        force[i] += f
+
+    # Compute collision forces and add to force
+    compute_collision_force()
+
+# Compute collision forces between particles
 def compute_collision_force():
     global force
     # Initialize collision force
@@ -187,77 +214,13 @@ def compute_collision_force():
     # Add collision force to total force
     force += collision_force
 
-# Modify the compute_force() function to include collision forces
-def compute_force():
-    # Clear forces
-    force[:, :] = 0.0
-
-    # Compute acoustic force
-    for i in range(N):
-        f_x = 0.0
-        f_y = 0.0
-
-        for wave in range(num_waves_x):
-            f_x += particle_radius[i]**3 * 1e6 * ax_field[wave] * np.sin(2 * PI * pos[i][0] * kx_field[wave])
-
-        for wave in range(num_waves_y):
-            f_y += particle_radius[i]**3 * 1e6 * ay_field[wave] * np.sin(2 * PI * pos[i][1] * ky_field[wave])
-
-        f_vector = np.array([f_x, f_y]) * po
-        force[i] += f_vector
-
-    # Force due to drag
-    for i in range(N):
-        f = -drag * particle_radius[i] * vel[i]
-        force[i] += f
-
-    # Compute collision forces and add to force
-    compute_collision_force()
-'''
-# Update particle collisions
-def collision_update():
-    for i in range(N - 1):
-        for j in range(i + 1, N):
-            diff = pos[j] - pos[i]
-            r = np.linalg.norm(diff)
-            overlap = particle_radius[i] + particle_radius[j] - r
-            if overlap > 0:
-                # Particles are overlapping
-                # Compute the normal vector
-                if r > 0:
-                    normal = diff / r
-                else:
-                    # If r is zero (particles are exactly on top of each other), choose a default normal
-                    normal = np.array([1.0, 0.0])
-
-                # Compute relative velocity in normal direction
-                rel_vel = vel[j] - vel[i]
-                vel_along_normal = np.dot(rel_vel, normal)
-
-                # Only resolve if particles are moving towards each other
-                if vel_along_normal < 0:
-                    # Compute impulse scalar
-                    restitution = 1.0  # Perfectly elastic collision
-                    impulse_scalar = -(1 + restitution) * vel_along_normal
-                    impulse_scalar /= (1 / particle_m[i] + 1 / particle_m[j])
-
-                    # Apply impulse to velocities
-                    impulse = impulse_scalar * normal
-                    vel[i] -= impulse / particle_m[i]
-                    vel[j] += impulse / particle_m[j]
-
-                # Adjust positions to resolve overlap
-                correction = normal * (overlap / (particle_m[i] + particle_m[j]))
-                pos[i] -= correction * particle_m[j]
-                pos[j] += correction * particle_m[i]'''
-
 # Update positions and velocities
 def update():
     dt = h / substepping
     for i in range(N):
         vel[i] += dt * force[i] / particle_m[i]
         pos[i] += dt * vel[i]
-        # Collision detection at edges (wall collisions)
+        # Collision detection at edges
         if pos[i][0] < 0.0 + particle_radius[i]:
             pos[i][0] = 0.0 + particle_radius[i]
             vel[i][0] *= -1
@@ -351,11 +314,11 @@ def plot_average_neighbors_over_time():
     plt.figure(figsize=(10, 6))
     plt.plot(average_neighbors_over_time, label="Average Neighbors Over Time", color="blue", linewidth=2)
     
-    # Add vertical lines at key_press_time_steps
-    for idx, step in enumerate(key_press_time_steps):
-        plt.axvline(x=step, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
+    # Add vertical lines at key_press_data_indices
+    for idx, data_index in enumerate(key_press_data_indices):
+        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
     
-    plt.xlabel("Time Step")
+    plt.xlabel("Data Index")
     plt.ylabel("Average Number of Neighbors")
     plt.title("Average Neighbors Over Time")
     plt.legend()
@@ -380,11 +343,11 @@ def plot_neighbor_distribution_over_time():
     for i in range(max_neighbors + 1):
         plt.plot(cumulative_counts[i], label=f"Up to {i} neighbors", linewidth=2)
     
-    # Add vertical lines at key_press_time_steps
-    for idx, step in enumerate(key_press_time_steps):
-        plt.axvline(x=step, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
+    # Add vertical lines at key_press_data_indices
+    for idx, data_index in enumerate(key_press_data_indices):
+        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
     
-    plt.xlabel("Time Step")
+    plt.xlabel("Data Index")
     plt.ylabel("Number of Particles")
     plt.title("Cumulative Neighbor Distribution Over Time")
     plt.legend()
@@ -393,30 +356,31 @@ def plot_neighbor_distribution_over_time():
     plt.show(block=False)
     plt.pause(0.001)  # Allow the plot to update without blocking
 
-def plot_radial_distribution():
-    plt.figure(figsize=(10, 6))
-    positions = pos.copy()
-    rs = np.linspace(0, np.sqrt(2), 500)
-    gs = np.zeros_like(rs)
-    mid = np.mean(positions, axis=0)
-
-    for j in range(N):
-        distance = np.linalg.norm(positions[j] - mid)
-        for i, r in enumerate(rs):
-            if particle_radius[j] == 0:
-                continue  # Avoid division by zero
-            contribution = np.sqrt(max(0., 1. - ((distance - r) ** 2) / (particle_radius[j] ** 2)))
-            gs[i] += contribution
-
-    plt.plot(rs, gs, label="Radial Distribution Function", color="black", linewidth=2, linestyle="--")
-    plt.xlabel("Distance from Center")
-    plt.ylabel("Radial Distribution")
-    plt.title("Radial Distribution Function")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show(block=False)
-    plt.pause(0.001)  # Allow the plot to update without blocking
+# Commented out the radial distribution plot as it's no longer needed
+# def plot_radial_distribution():
+#     plt.figure(figsize=(10, 6))
+#     positions = pos.copy()
+#     rs = np.linspace(0, np.sqrt(2), 500)
+#     gs = np.zeros_like(rs)
+#     mid = np.mean(positions, axis=0)
+#
+#     for j in range(N):
+#         distance = np.linalg.norm(positions[j] - mid)
+#         for i, r in enumerate(rs):
+#             if particle_radius[j] == 0:
+#                 continue  # Avoid division by zero
+#             contribution = np.sqrt(max(0., 1. - ((distance - r) ** 2) / (particle_radius[j] ** 2)))
+#             gs[i] += contribution
+#
+#     plt.plot(rs, gs, label="Radial Distribution Function", color="black", linewidth=2, linestyle="--")
+#     plt.xlabel("Distance from Center")
+#     plt.ylabel("Radial Distribution")
+#     plt.title("Radial Distribution Function")
+#     plt.legend()
+#     plt.grid(True)
+#     plt.tight_layout()
+#     plt.show(block=False)
+#     plt.pause(0.001)  # Allow the plot to update without blocking
 
 # Initialize the simulation
 initialize_cluster()
@@ -493,8 +457,8 @@ while running:
                     kx_field[0] = kx[0] = val
                 else:
                     ky_field[0] = ky[0] = val
-                # Record the current time step when a number key is pressed
-                key_press_time_steps.append(time_step)
+                # Record the current data index when a number key is pressed
+                key_press_data_indices.append(len(average_neighbors_over_time))
             elif event.key == pygame.K_x:
                 xchanging = True
                 message = "Changing number of nodes along X-axis"
@@ -505,12 +469,12 @@ while running:
                 # Plot graphs using Matplotlib
                 plot_average_neighbors_over_time()
                 plot_neighbor_distribution_over_time()
-                plot_radial_distribution()
+                # plot_radial_distribution()  # Commented out
 
     if not paused:
         for _ in range(substepping):
             compute_force()
-            # collision_update()  # This line is now commented out or removed
+            # collision_update()  # Removed as collision physics are updated
             update()
             compute_energy()
             calc_neighbors()
