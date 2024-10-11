@@ -74,6 +74,7 @@ cluster_id = 0
 average_neighbors_over_time = []
 neighbor_count_over_time = {i: [] for i in range(7)}
 neighbor_counts_field = np.zeros(7, dtype=np.int32)
+weighted_avg_density_over_time = []  # New list to store weighted average cluster density over time
 
 # Initialize key press tracking variables
 key_press_data_indices = []  # Stores data indices when number keys are pressed
@@ -309,6 +310,35 @@ def update_neighbor_count_over_time():
     for i in range(7):
         neighbor_count_over_time[i].append(counts[i])
 
+def calculate_weighted_avg_density():
+    global weighted_avg_density_over_time
+    total_weighted_density = 0.0
+    total_particles = 0
+    for cluster_idx in range(cluster_id):
+        indices = np.where(particle_node_assignments == cluster_idx)[0]
+        num_particles_in_cluster = len(indices)
+        if num_particles_in_cluster > 1:
+            # For each particle, compute distance to its nearest neighbor in the cluster
+            distances = []
+            for i in indices:
+                # Get positions of other particles in the same cluster
+                other_indices = indices[indices != i]
+                if len(other_indices) == 0:
+                    continue  # Only one particle left, skip
+                dists = np.linalg.norm(pos[other_indices] - pos[i], axis=1)
+                min_dist = np.min(dists)
+                distances.append(min_dist)
+            if len(distances) > 0:
+                avg_distance = np.mean(distances)
+                # Weight by number of particles in the cluster
+                total_weighted_density += avg_distance * num_particles_in_cluster
+                total_particles += num_particles_in_cluster
+    if total_particles > 0:
+        weighted_avg_density = total_weighted_density / total_particles
+    else:
+        weighted_avg_density = 0.0  # No clusters, density is zero
+    weighted_avg_density_over_time.append(weighted_avg_density)
+
 # Plotting functions using Matplotlib
 def plot_average_neighbors_over_time():
     plt.figure(figsize=(10, 6))
@@ -356,31 +386,22 @@ def plot_neighbor_distribution_over_time():
     plt.show(block=False)
     plt.pause(0.001)  # Allow the plot to update without blocking
 
-# Commented out the radial distribution plot as it's no longer needed
-# def plot_radial_distribution():
-#     plt.figure(figsize=(10, 6))
-#     positions = pos.copy()
-#     rs = np.linspace(0, np.sqrt(2), 500)
-#     gs = np.zeros_like(rs)
-#     mid = np.mean(positions, axis=0)
-#
-#     for j in range(N):
-#         distance = np.linalg.norm(positions[j] - mid)
-#         for i, r in enumerate(rs):
-#             if particle_radius[j] == 0:
-#                 continue  # Avoid division by zero
-#             contribution = np.sqrt(max(0., 1. - ((distance - r) ** 2) / (particle_radius[j] ** 2)))
-#             gs[i] += contribution
-#
-#     plt.plot(rs, gs, label="Radial Distribution Function", color="black", linewidth=2, linestyle="--")
-#     plt.xlabel("Distance from Center")
-#     plt.ylabel("Radial Distribution")
-#     plt.title("Radial Distribution Function")
-#     plt.legend()
-#     plt.grid(True)
-#     plt.tight_layout()
-#     plt.show(block=False)
-#     plt.pause(0.001)  # Allow the plot to update without blocking
+def plot_weighted_avg_density_over_time():
+    plt.figure(figsize=(10, 6))
+    plt.plot(weighted_avg_density_over_time, label="Weighted Avg Cluster Density Over Time", color="purple", linewidth=2)
+    
+    # Add vertical lines at key_press_data_indices
+    for idx, data_index in enumerate(key_press_data_indices):
+        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
+    
+    plt.xlabel("Data Index")
+    plt.ylabel("Weighted Average Cluster Density")
+    plt.title("Weighted Average Cluster Density Over Time")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.001)  # Allow the plot to update without blocking
 
 # Initialize the simulation
 initialize_cluster()
@@ -469,6 +490,7 @@ while running:
                 # Plot graphs using Matplotlib
                 plot_average_neighbors_over_time()
                 plot_neighbor_distribution_over_time()
+                plot_weighted_avg_density_over_time()
                 # plot_radial_distribution()  # Commented out
 
     if not paused:
@@ -481,6 +503,7 @@ while running:
             run_clustering(d)
             update_average_neighbors()
             update_neighbor_count_over_time()
+            calculate_weighted_avg_density()  # New function to update density over time
 
         time_step += 1  # Increment the time step after each simulation step
 
@@ -577,6 +600,13 @@ while running:
     if y_pos + spacing <= text_area_rect.bottom:
         num_clusters_surface = font.render(f"Number of Clusters: {total_clusters}", True, (255, 255, 255))
         window.blit(num_clusters_surface, (start_x, y_pos))
+        y_pos += spacing
+
+    # Display weighted average cluster density
+    if y_pos + spacing <= text_area_rect.bottom:
+        weighted_avg_density = weighted_avg_density_over_time[-1] if weighted_avg_density_over_time else 0
+        density_surface = font.render(f"Weighted Avg Cluster Density: {weighted_avg_density:.4f}", True, (255, 255, 255))
+        window.blit(density_surface, (start_x, y_pos))
         y_pos += spacing
 
     # Draw Average Neighbors Over Time Graph
