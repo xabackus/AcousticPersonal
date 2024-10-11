@@ -144,6 +144,50 @@ def initialize_cluster():
         particle_color[i] = 0.3 + 0.7 * np.random.rand(3)
 
 # Compute forces acting on particles
+def compute_collision_force():
+    global force
+    # Initialize collision force
+    collision_force = np.zeros_like(force)
+    EPSILON = 1e-4
+    DAMPING = 0.1
+    K = 1e11  # Stiffness constant (you may need to adjust this value)
+
+    # Calculate pairwise differences and distances
+    diff = pos[:, np.newaxis, :] - pos[np.newaxis, :, :]  # Shape (N, N, 2)
+    r = np.linalg.norm(diff, axis=2) + EPSILON  # Shape (N, N)
+
+    # Calculate overlaps
+    overlap = particle_radius[:, np.newaxis] + particle_radius[np.newaxis, :] - r  # Shape (N, N)
+    overlap = np.maximum(overlap, 0)  # Only positive overlaps (compressions)
+
+    # Normal force magnitude (Hertzian contact model)
+    normal_force_magnitude = K * overlap ** (3/2)  # Shape (N, N)
+
+    # Compute unit vectors along diff
+    normal_vector = diff / r[..., np.newaxis]  # Shape (N, N, 2)
+
+    # Compute relative velocities
+    relative_velocity = vel[:, np.newaxis, :] - vel[np.newaxis, :, :]  # Shape (N, N, 2)
+
+    # Compute relative velocity along the normal direction
+    vel_along_normal = np.sum(relative_velocity * normal_vector, axis=2)  # Shape (N, N)
+
+    # Damping force magnitude
+    damping_force_magnitude = -DAMPING * vel_along_normal  # Shape (N, N)
+
+    # Total force magnitude
+    total_force_magnitude = normal_force_magnitude + damping_force_magnitude  # Shape (N, N)
+
+    # Total force vector
+    total_force = total_force_magnitude[..., np.newaxis] * normal_vector  # Shape (N, N, 2)
+
+    # Compute collision force on each particle
+    collision_force = np.sum(total_force, axis=1) - np.sum(total_force, axis=0)  # Shape (N, 2)
+
+    # Add collision force to total force
+    force += collision_force
+
+# Modify the compute_force() function to include collision forces
 def compute_force():
     # Clear forces
     force[:, :] = 0.0
@@ -167,6 +211,9 @@ def compute_force():
         f = -drag * particle_radius[i] * vel[i]
         force[i] += f
 
+    # Compute collision forces and add to force
+    compute_collision_force()
+'''
 # Update particle collisions
 def collision_update():
     for i in range(N - 1):
@@ -202,7 +249,7 @@ def collision_update():
                 # Adjust positions to resolve overlap
                 correction = normal * (overlap / (particle_m[i] + particle_m[j]))
                 pos[i] -= correction * particle_m[j]
-                pos[j] += correction * particle_m[i]
+                pos[j] += correction * particle_m[i]'''
 
 # Update positions and velocities
 def update():
@@ -210,7 +257,7 @@ def update():
     for i in range(N):
         vel[i] += dt * force[i] / particle_m[i]
         pos[i] += dt * vel[i]
-        # Collision detection at edges
+        # Collision detection at edges (wall collisions)
         if pos[i][0] < 0.0 + particle_radius[i]:
             pos[i][0] = 0.0 + particle_radius[i]
             vel[i][0] *= -1
@@ -463,7 +510,7 @@ while running:
     if not paused:
         for _ in range(substepping):
             compute_force()
-            collision_update()
+            # collision_update()  # This line is now commented out or removed
             update()
             compute_energy()
             calc_neighbors()
