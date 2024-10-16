@@ -4,6 +4,10 @@ import sys
 import math
 import matplotlib.pyplot as plt
 import cv2  # Import OpenCV for video writing
+import json  # Import json for saving/loading key press data
+
+# Set the mode: 'write' or 'read'
+mode = 'read'  # Default to 'write' mode. Change to 'read' to replay simulation.
 
 # Constants and Initialization
 PI = 3.1415926
@@ -35,7 +39,8 @@ video_frames_written = 0
 if record_video:
     frame_width = window_width
     frame_height = window_height
-    video_writer = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'XVID'), video_fps, (frame_width, frame_height))
+    # Use 'mp4v' codec instead of 'XVID' for better compatibility
+    video_writer = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'mp4v'), video_fps, (frame_width, frame_height))
 
 # Simulation Parameters
 paused = False
@@ -93,6 +98,19 @@ weighted_avg_aspect_ratio_over_time = []  # List to store weighted average aspec
 # Initialize key press tracking variables
 key_press_data_indices = []  # Stores data indices when number keys are pressed
 time_step = 0  # Tracks the current time step
+
+key_press_data = []  # List of tuples: (time_step, key_name)
+
+if mode == 'read':
+    # Load key_press_data from file
+    with open('key_press_data.txt', 'r') as f:
+        key_press_data = json.load(f)
+    key_press_index = 0
+else:
+    key_press_data = []
+
+# Set random seed for reproducibility
+np.random.seed(0)
 
 # Initialize particles randomly
 def initialize():
@@ -530,52 +548,81 @@ neighbor_colors = [
 
 neighbor_labels = ["0", "1", "2", "3", "4", "5", "6"]
 
+def process_key_press(key):
+    global xchanging, message, kx_field, ky_field, kx, ky, paused, running, key_press_data_indices, record_video, video_writer
+    if key == pygame.K_ESCAPE:
+        running = False
+    elif key == pygame.K_r:
+        initialize_cluster()
+    elif key == pygame.K_SPACE:
+        paused = not paused
+    elif key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9]:
+        val = int(pygame.key.name(key))
+        if xchanging:
+            kx_field[0] = kx[0] = val
+        else:
+            ky_field[0] = ky[0] = val
+        # Record the current data index when a number key is pressed
+        key_press_data_indices.append(len(average_neighbors_over_time))
+    elif key == pygame.K_x:
+        xchanging = True
+        message = "Changing number of nodes along X-axis"
+    elif key == pygame.K_y:
+        xchanging = False
+        message = "Changing number of nodes along Y-axis"
+    elif key == pygame.K_g:
+        # Plot graphs using Matplotlib
+        plot_average_neighbors_over_time()
+        plot_neighbor_distribution_over_time()
+        plot_weighted_avg_density_over_time()
+        plot_weighted_avg_aspect_ratio_over_time()
+        # Release the video writer
+        if record_video and video_writer is not None:
+            video_writer.release()
+            video_writer = None
+            record_video = False  # Stop recording
+            print(f"Video saved as {video_filename}")
+        if mode == 'write':
+            # Save key_press_data to file
+            with open('key_press_data.txt', 'w') as f:
+                json.dump(key_press_data, f)
+            print("Key press data saved to key_press_data.txt")
+        elif mode == 'read':
+            # In 'read' mode, when 'g' is pressed, we stop the simulation
+            pass  # We will set running = False after processing all key presses
+        # Do not set running = False here, as we need to continue to render the final frame
+
 # Main simulation loop
 d = 1.5 * particle_radius_max  # Set the distance threshold for clustering
 running = True
 while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
+    if mode == 'write':
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
                 running = False
-            elif event.key == pygame.K_r:
-                initialize_cluster()
-            elif event.key == pygame.K_SPACE:
-                paused = not paused
-            elif event.unicode in "123456789":
-                val = int(event.unicode)
-                if xchanging:
-                    kx_field[0] = kx[0] = val
-                else:
-                    ky_field[0] = ky[0] = val
-                # Record the current data index when a number key is pressed
-                key_press_data_indices.append(len(average_neighbors_over_time))
-            elif event.key == pygame.K_x:
-                xchanging = True
-                message = "Changing number of nodes along X-axis"
-            elif event.key == pygame.K_y:
-                xchanging = False
-                message = "Changing number of nodes along Y-axis"
-            elif event.key == pygame.K_g:
-                # Plot graphs using Matplotlib
-                plot_average_neighbors_over_time()
-                plot_neighbor_distribution_over_time()
-                plot_weighted_avg_density_over_time()
-                plot_weighted_avg_aspect_ratio_over_time()
-                # plot_radial_distribution()  # Commented out
-                # Release the video writer
-                if record_video and video_writer is not None:
-                    video_writer.release()
-                    video_writer = None
-                    record_video = False
-                    print(f"Video saved as {video_filename}")
+            elif event.type == pygame.KEYDOWN:
+                key_name = pygame.key.name(event.key)
+                key_press_data.append((time_step, key_name))
+                process_key_press(event.key)
+    elif mode == 'read':
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+        # Process virtual key presses
+        while key_press_index < len(key_press_data) and key_press_data[key_press_index][0] == time_step:
+            key_name = key_press_data[key_press_index][1]
+            key = pygame.key.key_code(key_name)
+            process_key_press(key)
+            if key_name == 'g':
+                running = False
+            key_press_index += 1
 
     if not paused:
         for _ in range(substepping):
             compute_force()
-            # collision_update()  # Removed as collision physics are updated
             update()
             compute_energy()
             calc_neighbors()
