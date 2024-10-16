@@ -5,8 +5,10 @@ import math
 import matplotlib.pyplot as plt
 import cv2  # Import OpenCV for video writing
 import json  # Import json for saving/loading key press data
+import os   # For file path operations
 
 # Set the mode: 'write' or 'read'
+# mode = 'write'  # Default to 'write' mode. Change to 'read' to replay simulation.
 mode = 'read'  # Default to 'write' mode. Change to 'read' to replay simulation.
 
 # Constants and Initialization
@@ -427,8 +429,12 @@ def plot_average_neighbors_over_time():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show(block=False)
-    plt.pause(0.001)  # Allow the plot to update without blocking
+    
+    # Save the figure
+    filename = f"average_neighbors_over_time_{mode}.png"
+    plt.savefig(filename)
+    print(f"Plot saved as {filename}")
+    plt.close()
 
 def plot_neighbor_distribution_over_time():
     plt.figure(figsize=(10, 6))
@@ -456,8 +462,12 @@ def plot_neighbor_distribution_over_time():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show(block=False)
-    plt.pause(0.001)  # Allow the plot to update without blocking
+    
+    # Save the figure
+    filename = f"neighbor_distribution_over_time_{mode}.png"
+    plt.savefig(filename)
+    print(f"Plot saved as {filename}")
+    plt.close()
 
 def plot_weighted_avg_density_over_time():
     plt.figure(figsize=(10, 6))
@@ -473,8 +483,12 @@ def plot_weighted_avg_density_over_time():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show(block=False)
-    plt.pause(0.001)  # Allow the plot to update without blocking
+    
+    # Save the figure
+    filename = f"weighted_avg_density_over_time_{mode}.png"
+    plt.savefig(filename)
+    print(f"Plot saved as {filename}")
+    plt.close()
 
 def plot_weighted_avg_aspect_ratio_over_time():
     plt.figure(figsize=(10, 6))
@@ -490,8 +504,12 @@ def plot_weighted_avg_aspect_ratio_over_time():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show(block=False)
-    plt.pause(0.001)
+    
+    # Save the figure
+    filename = f"weighted_avg_aspect_ratio_over_time_{mode}.png"
+    plt.savefig(filename)
+    print(f"Plot saved as {filename}")
+    plt.close()
 
 # Initialize the simulation
 initialize_cluster()
