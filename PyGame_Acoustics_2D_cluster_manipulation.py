@@ -3,6 +3,7 @@ import pygame
 import sys
 import math
 import matplotlib.pyplot as plt
+import cv2  # Import OpenCV for video writing
 
 # Constants and Initialization
 PI = 3.1415926
@@ -23,6 +24,18 @@ pygame.init()
 window = pygame.display.set_mode((window_width, window_height))
 pygame.display.set_caption("Bulk Acoustic 2D Simulation with Dashboards")
 clock = pygame.time.Clock()
+
+# Video recording setup
+record_video = True  # Set to True to record video
+video_filename = 'simulation_video.mp4'
+video_writer = None
+video_fps = 30  # Assuming 30 FPS
+video_frames_written = 0
+
+if record_video:
+    frame_width = window_width
+    frame_height = window_height
+    video_writer = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'XVID'), video_fps, (frame_width, frame_height))
 
 # Simulation Parameters
 paused = False
@@ -552,6 +565,12 @@ while running:
                 plot_weighted_avg_density_over_time()
                 plot_weighted_avg_aspect_ratio_over_time()
                 # plot_radial_distribution()  # Commented out
+                # Release the video writer
+                if record_video and video_writer is not None:
+                    video_writer.release()
+                    video_writer = None
+                    record_video = False
+                    print(f"Video saved as {video_filename}")
 
     if not paused:
         for _ in range(substepping):
@@ -779,7 +798,24 @@ while running:
             window.blit(text_surface, screen_pos)
 
     pygame.display.flip()
+    
+    # Capture the screen and write to video
+    if record_video:
+        # Capture the screen
+        frame = pygame.surfarray.array3d(window)
+        # Convert from (width, height, 3) to (height, width, 3)
+        frame = np.transpose(frame, (1, 0, 2))
+        # Convert RGB to BGR
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        # Write frame to video
+        video_writer.write(frame)
+        video_frames_written += 1
+
     clock.tick(30)  # Limit to 30 FPS
+
+# When the simulation ends, ensure the video writer is released
+if video_writer is not None:
+    video_writer.release()
 
 pygame.quit()
 sys.exit()
