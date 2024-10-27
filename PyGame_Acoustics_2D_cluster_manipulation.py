@@ -7,9 +7,10 @@ import cv2  # Import OpenCV for video writing
 import json  # Import json for saving/loading key press data
 import os   # For file path operations
 
-# Set the mode: 'write' or 'read'
+# Set the mode: 'write', 'read', or 'simulation'
 # mode = 'write'  # Default to 'write' mode. Change to 'read' to replay simulation.
-mode = 'read'  # Default to 'write' mode. Change to 'read' to replay simulation.
+# mode = 'read'  # Default to 'write' mode. Change to 'read' to replay simulation.
+mode = 'simulation'  # New 'simulation' mode for ML-based control
 
 # Constants and Initialization
 PI = 3.1415926
@@ -46,7 +47,7 @@ if record_video:
 
 # Simulation Parameters
 paused = False
-N = 61  # Number of particles
+N = 9  # Number of particles (changed to 60 for equal splitting into 3 clusters)
 particle_m_max = 5.0  # Mass
 nest_size = 0.6  # Nest size
 particle_radius_max = 10.0 / float(res)  # Particle radius for rendering (~0.0195)
@@ -54,6 +55,9 @@ init_vel = 100  # Initial velocity
 
 h = 1e-5  # Time step
 substepping = 3  # Number of sub-iterations within a time step
+
+# Set the distance threshold for clustering
+d = 1.5 * particle_radius_max  # Moved here to make 'd' a global variable
 
 # Fields
 pos = np.zeros((N, 2), dtype=np.float32)
@@ -608,63 +612,194 @@ def process_key_press(key):
         elif mode == 'read':
             # In 'read' mode, when 'g' is pressed, we stop the simulation
             pass  # We will set running = False after processing all key presses
+        elif mode == 'simulation':
+            # In 'simulation' mode, when 'g' is pressed, we stop the simulation
+            pass
         # Do not set running = False here, as we need to continue to render the final frame
 
-# Main simulation loop
-d = 1.5 * particle_radius_max  # Set the distance threshold for clustering
-running = True
-while running:
-    if mode == 'write':
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                key_name = pygame.key.name(event.key)
-                key_press_data.append((time_step, key_name))
-                process_key_press(event.key)
-    elif mode == 'read':
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+####################################################################################
+# New ML code for 'simulation' mode begins here
+
+# Function to compute the loss based on the current particle positions
+def compute_loss():
+    # Run clustering to identify clusters
+    d = 1.5 * particle_radius_max  # Use same distance threshold
+    run_clustering(d)
+    # Goal is to split particles into 3 equal clusters
+    target_num_clusters = 3
+    target_cluster_size = N / target_num_clusters  # Should be 20 particles per cluster
+    # Compute loss as sum of squared differences between actual cluster sizes and target
+    cluster_sizes = []
+    for cluster_idx in range(cluster_id):
+        indices = np.where(particle_node_assignments == cluster_idx)[0]
+        cluster_sizes.append(len(indices))
+    # Include unassigned particles as separate clusters
+    unassigned_indices = np.where(particle_node_assignments == -1)[0]
+    if len(unassigned_indices) > 0:
+        cluster_sizes.extend([1]*len(unassigned_indices))
+    # If number of clusters is less than target, add penalties
+    num_clusters = len(cluster_sizes)
+    loss = 0.0
+    if num_clusters < target_num_clusters:
+        loss += (target_num_clusters - num_clusters) * 1000  # Large penalty
+    # If number of clusters is more than target, add penalties
+    if num_clusters > target_num_clusters:
+        loss += (num_clusters - target_num_clusters) * 1000  # Large penalty
+    # Compute squared differences
+    for size in cluster_sizes:
+        loss += (size - target_cluster_size) ** 2
+    return loss
+
+# Function to run the simulation with given actions and return the loss
+def run_simulation_with_actions(actions, render=False):
+    global pos, vel, kx_field, ky_field, key_press_data_indices, average_neighbors_over_time, neighbor_count_over_time, weighted_avg_density_over_time, weighted_avg_aspect_ratio_over_time, time_step, cluster_id, paused, running
+    d_local = d  # Use the global 'd'
+    # Reset simulation state
+    initialize_cluster()
+    pos_initial = pos.copy()
+    vel_initial = vel.copy()
+    # Clear previous data
+    key_press_data_indices = []
+    average_neighbors_over_time = []
+    for i in neighbor_count_over_time:
+        neighbor_count_over_time[i] = []
+    weighted_avg_density_over_time = []
+    weighted_avg_aspect_ratio_over_time = []
+    time_step = 0
+    cluster_id = 0
+
+    # Define action time steps
+    action_time_steps = [1000, 2000, 3000]  # You can adjust these values
+    action_index = 0  # Index of the current action
+
+    # Main simulation loop
+    max_time_steps = 4000  # Total simulation time steps
+    running = True
+    while time_step < max_time_steps and running:
+        # Handle events to keep the window responsive
+        if render:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     running = False
-        # Process virtual key presses
-        while key_press_index < len(key_press_data) and key_press_data[key_press_index][0] == time_step:
-            key_name = key_press_data[key_press_index][1]
-            key = pygame.key.key_code(key_name)
-            process_key_press(key)
-            if key_name == 'g':
-                running = False
-            key_press_index += 1
+                    pygame.quit()
+                    sys.exit()
+                elif event.type == pygame.KEYDOWN:
+                    key_name = pygame.key.name(event.key)
+                    process_key_press(event.key)
 
-    if not paused:
-        for _ in range(substepping):
-            compute_force()
-            update()
-            compute_energy()
-            calc_neighbors()
-            run_clustering(d)
-            update_average_neighbors()
-            update_neighbor_count_over_time()
-            calculate_weighted_avg_density()  # Update density over time
-            cluster_aspect_ratios = calculate_aspect_ratios()  # Calculate aspect ratios
+        # Apply action if it's time
+        if action_index < len(actions) and time_step == action_time_steps[action_index]:
+            # Apply action
+            kx_field[0] = kx[0] = int(actions[action_index][0])
+            ky_field[0] = ky[0] = int(actions[action_index][1])
+            key_press_data_indices.append(len(average_neighbors_over_time))
+            action_index += 1
 
-        time_step += 1  # Increment the time step after each simulation step
+        if not paused:
+            for _ in range(substepping):
+                compute_force()
+                update()
+                compute_energy()
+                calc_neighbors()
+                run_clustering(d_local)
+                update_average_neighbors()
+                update_neighbor_count_over_time()
+                calculate_weighted_avg_density()  # Update density over time
+                cluster_aspect_ratios = calculate_aspect_ratios()  # Calculate aspect ratios
 
-        total_clusters = cluster_id
+            time_step += 1
 
-        assignments = particle_node_assignments.copy()
+            # Render the simulation if required
+            if render:
+                render_simulation(cluster_aspect_ratios)
+                clock.tick(30)  # Limit to 30 FPS
 
-        unassigned_mask = assignments == -1
+    # Compute loss at the end of simulation
+    loss = compute_loss()
 
-        assignments_unassigned = assignments.copy()
-        assignments_unassigned[unassigned_mask] = total_clusters
+    # Restore initial state (optional)
+    pos = pos_initial.copy()
+    vel = vel_initial.copy()
 
-        total_clusters_with_unassigned = total_clusters + 1
+    return loss
 
-        counts = np.bincount(assignments_unassigned.astype(np.int32), minlength=total_clusters_with_unassigned)
+# Gradient descent optimization function
+def optimize_actions():
+    # Initialize actions (kx and ky values at each action time step)
+    num_actions = 3  # Number of actions (maximum 3 moves)
+    actions = np.array([[1, 1]] * num_actions, dtype=float)  # Start with kx=1, ky=1
 
+    learning_rate = 0.1  # Learning rate for gradient descent
+    num_iterations = 20  # Number of gradient descent iterations
+
+    for iteration in range(num_iterations):
+        print(f"Optimization iteration {iteration+1}/{num_iterations}")
+        # Compute current loss with rendering
+        current_loss = run_simulation_with_actions(actions, render=True)
+        print(f"Current loss: {current_loss}")
+
+        # Initialize gradients
+        gradients = np.zeros_like(actions)
+
+        # Compute gradients using finite differences
+        delta = 0.1  # Small change for finite differences
+        for i in range(num_actions):
+            for j in range(2):  # For kx and ky
+                original_value = actions[i][j]
+
+                # Positive perturbation
+                actions[i][j] = original_value + delta
+                loss_plus = run_simulation_with_actions(actions, render=False)
+
+                # Negative perturbation
+                actions[i][j] = original_value - delta
+                loss_minus = run_simulation_with_actions(actions, render=False)
+
+                # Restore original value
+                actions[i][j] = original_value
+
+                # Compute gradient
+                gradient = (loss_plus - loss_minus) / (2 * delta)
+                gradients[i][j] = gradient
+
+        # Update actions using gradients
+        actions -= learning_rate * gradients
+
+        # Ensure actions are within valid range (1 to 9)
+        actions = np.clip(actions, 1, 9)
+
+    # After optimization, run the simulation one more time with optimized actions and rendering
+    final_loss = run_simulation_with_actions(actions, render=True)
+    print(f"Final optimized loss: {final_loss}")
+    print(f"Optimized actions: {actions}")
+
+    # Convert actions to key presses (integers)
+    key_presses = []
+    for action in actions:
+        kx_value = int(round(action[0]))
+        ky_value = int(round(action[1]))
+        key_presses.append((kx_value, ky_value))
+
+    # Output the key presses similar to 'write' mode
+    key_press_data.clear()
+    action_time_steps = [1000, 2000, 3000]
+    for i, (kx_value, ky_value) in enumerate(key_presses):
+        time_step_action = action_time_steps[i]
+        # Record key presses for 'x' and number
+        key_press_data.append((time_step_action, 'x'))
+        key_press_data.append((time_step_action + 1, str(kx_value)))
+        # Record key presses for 'y' and number
+        key_press_data.append((time_step_action + 2, 'y'))
+        key_press_data.append((time_step_action + 3, str(ky_value)))
+
+    # Save key_press_data to file
+    with open('key_press_data_simulation.txt', 'w') as f:
+        json.dump(key_press_data, f)
+    print("Optimized key press data saved to key_press_data_simulation.txt")
+
+# Function to render the simulation
+def render_simulation(cluster_aspect_ratios):
+    global assignments, cluster_id, pos
     # Clear the screen
     window.fill((17, 47, 65))  # Dark background
 
@@ -685,6 +820,17 @@ while running:
 
     # Draw particles
     num_colors = len(colors)
+    assignments = particle_node_assignments.copy()
+
+    unassigned_mask = assignments == -1
+
+    assignments_unassigned = assignments.copy()
+    assignments_unassigned[unassigned_mask] = cluster_id
+
+    total_clusters_with_unassigned = cluster_id + 1
+
+    counts = np.bincount(assignments_unassigned.astype(np.int32), minlength=total_clusters_with_unassigned)
+
     for i in range(N):
         cluster_id_i = assignments[i]
         num_neighbors = neighbors[i]
@@ -713,7 +859,7 @@ while running:
 
     # Render cluster information
     y_pos = start_y
-    for cluster_idx in range(total_clusters):
+    for cluster_idx in range(cluster_id):
         aspect_ratio = cluster_aspect_ratios.get(cluster_idx, 1.0)
         cluster_text = f"Cluster {cluster_idx + 1}: {counts[cluster_idx]} particles; aspect ratio = {aspect_ratio:.2f}"
         if y_pos + spacing > text_area_rect.bottom:
@@ -724,7 +870,7 @@ while running:
 
     # Display unassigned particles
     if y_pos + spacing <= text_area_rect.bottom:
-        cluster_text = f"Unassigned: {counts[total_clusters]} particles"
+        cluster_text = f"Unassigned: {counts[cluster_id]} particles"
         text_surface = font.render(cluster_text, True, (255, 255, 255))
         window.blit(text_surface, (start_x, y_pos))
         y_pos += spacing
@@ -744,7 +890,7 @@ while running:
 
     # Display number of clusters
     if y_pos + spacing <= text_area_rect.bottom:
-        num_clusters_surface = font.render(f"Number of Clusters: {total_clusters}", True, (255, 255, 255))
+        num_clusters_surface = font.render(f"Number of Clusters: {cluster_id}", True, (255, 255, 255))
         window.blit(num_clusters_surface, (start_x, y_pos))
         y_pos += spacing
 
@@ -852,7 +998,7 @@ while running:
 
     # Draw numbering labels to clusters on the simulation area
     pos_np = pos.copy()
-    for cluster_idx in range(total_clusters):
+    for cluster_idx in range(cluster_id):
         indices = np.where(assignments == cluster_idx)[0]
         if len(indices) > 0:
             cluster_positions = pos_np[indices]
@@ -863,24 +1009,289 @@ while running:
             window.blit(text_surface, screen_pos)
 
     pygame.display.flip()
-    
-    # Capture the screen and write to video
-    if record_video:
-        # Capture the screen
-        frame = pygame.surfarray.array3d(window)
-        # Convert from (width, height, 3) to (height, width, 3)
-        frame = np.transpose(frame, (1, 0, 2))
-        # Convert RGB to BGR
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        # Write frame to video
-        video_writer.write(frame)
-        video_frames_written += 1
 
-    clock.tick(30)  # Limit to 30 FPS
+# End of new ML code
+####################################################################################
 
-# When the simulation ends, ensure the video writer is released
-if video_writer is not None:
-    video_writer.release()
+# Main simulation loop
+if mode == 'simulation':
+    # In 'simulation' mode, run the optimization
+    optimize_actions()
+    # After optimization, you can switch to 'read' mode to replay the optimized actions
+    # Or continue to run the simulation with the optimized actions
+    # For simplicity, we will exit after optimization
+    pygame.quit()
+    sys.exit()
+else:
+    running = True
+    while running:
+        if mode == 'write':
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    key_name = pygame.key.name(event.key)
+                    key_press_data.append((time_step, key_name))
+                    process_key_press(event.key)
+        elif mode == 'read':
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+            # Process virtual key presses
+            while key_press_index < len(key_press_data) and key_press_data[key_press_index][0] == time_step:
+                key_name = key_press_data[key_press_index][1]
+                key = pygame.key.key_code(key_name)
+                process_key_press(key)
+                if key_name == 'g':
+                    running = False
+                key_press_index += 1
 
-pygame.quit()
-sys.exit()
+        if not paused:
+            for _ in range(substepping):
+                compute_force()
+                update()
+                compute_energy()
+                calc_neighbors()
+                run_clustering(d)
+                update_average_neighbors()
+                update_neighbor_count_over_time()
+                calculate_weighted_avg_density()  # Update density over time
+                cluster_aspect_ratios = calculate_aspect_ratios()  # Calculate aspect ratios
+
+            time_step += 1  # Increment the time step after each simulation step
+
+            total_clusters = cluster_id
+
+            assignments = particle_node_assignments.copy()
+
+            unassigned_mask = assignments == -1
+
+            assignments_unassigned = assignments.copy()
+            assignments_unassigned[unassigned_mask] = total_clusters
+
+            total_clusters_with_unassigned = total_clusters + 1
+
+            counts = np.bincount(assignments_unassigned.astype(np.int32), minlength=total_clusters_with_unassigned)
+
+        # Clear the screen
+        window.fill((17, 47, 65))  # Dark background
+
+        # Draw pressure minima lines
+        lines = []
+        for x_line in np.linspace(.5/kx[0], 1-.5/kx[0], kx[0]):
+            start_pos = (int(x_line * res), 0)
+            end_pos = (int(x_line * res), res)
+            lines.append((start_pos, end_pos))
+
+        for y_line in np.linspace(.5/ky[0], 1-.5/ky[0], ky[0]):
+            start_pos = (0, int(y_line * res))
+            end_pos = (res, int(y_line * res))
+            lines.append((start_pos, end_pos))
+
+        for line in lines:
+            pygame.draw.line(window, (128, 128, 128), line[0], line[1], 1)  # Gray lines
+
+        # Draw particles
+        num_colors = len(colors)
+        for i in range(N):
+            cluster_id_i = assignments[i]
+            num_neighbors = neighbors[i]
+            brightness_factor = min(max(num_neighbors / 6, 0), 1)
+
+            if cluster_id_i == -1:
+                base_color = 0x808080  # Gray for unassigned particles
+            else:
+                base_color = colors[cluster_id_i % num_colors]
+
+            color = adjust_brightness(base_color, brightness_factor)
+
+            # Ensure positions are within [0,1]
+            pos_clipped = np.clip(pos[i], 0.0, 1.0)
+            screen_pos = (int(pos_clipped[0] * res), int(pos_clipped[1] * res))
+            radius = int(max(particle_radius[i] * res, 2))  # Minimum radius of 2 pixels for visibility
+            pygame.draw.circle(window, color, screen_pos, radius)
+
+        # Draw Text Dashboard
+        pygame.draw.rect(window, (30, 30, 30), text_area_rect)  # Background for text area
+
+        # Display cluster information
+        start_x = text_area_rect.left + 10
+        start_y = text_area_rect.top + 10  # Starting y position for text
+        spacing = 20  # Spacing between lines
+
+        # Render cluster information
+        y_pos = start_y
+        for cluster_idx in range(total_clusters):
+            aspect_ratio = cluster_aspect_ratios.get(cluster_idx, 1.0)
+            cluster_text = f"Cluster {cluster_idx + 1}: {counts[cluster_idx]} particles; aspect ratio = {aspect_ratio:.2f}"
+            if y_pos + spacing > text_area_rect.bottom:
+                break
+            text_surface = font.render(cluster_text, True, (255, 255, 255))
+            window.blit(text_surface, (start_x, y_pos))
+            y_pos += spacing
+
+        # Display unassigned particles
+        if y_pos + spacing <= text_area_rect.bottom:
+            cluster_text = f"Unassigned: {counts[total_clusters]} particles"
+            text_surface = font.render(cluster_text, True, (255, 255, 255))
+            window.blit(text_surface, (start_x, y_pos))
+            y_pos += spacing
+
+        # Display messages
+        if y_pos + spacing <= text_area_rect.bottom:
+            message_surface = font.render(message, True, (255, 255, 255))
+            window.blit(message_surface, (start_x, y_pos))
+            y_pos += spacing
+
+        # Display average neighbors
+        if y_pos + spacing <= text_area_rect.bottom:
+            avg_neighbors = average_neighbors_over_time[-1] if average_neighbors_over_time else 0
+            avg_neighbors_surface = font.render(f"Average Neighbors: {avg_neighbors:.2f}", True, (255, 255, 255))
+            window.blit(avg_neighbors_surface, (start_x, y_pos))
+            y_pos += spacing
+
+        # Display number of clusters
+        if y_pos + spacing <= text_area_rect.bottom:
+            num_clusters_surface = font.render(f"Number of Clusters: {total_clusters}", True, (255, 255, 255))
+            window.blit(num_clusters_surface, (start_x, y_pos))
+            y_pos += spacing
+
+        # Display weighted average cluster density
+        if y_pos + spacing <= text_area_rect.bottom:
+            weighted_avg_density = weighted_avg_density_over_time[-1] if weighted_avg_density_over_time else 0
+            density_surface = font.render(f"Weighted Avg Cluster Density: {weighted_avg_density:.4f}", True, (255, 255, 255))
+            window.blit(density_surface, (start_x, y_pos))
+            y_pos += spacing
+
+        # Display weighted average aspect ratio
+        if y_pos + spacing <= text_area_rect.bottom:
+            weighted_avg_aspect_ratio = weighted_avg_aspect_ratio_over_time[-1] if weighted_avg_aspect_ratio_over_time else 0
+            aspect_ratio_surface = font.render(f"Weighted Avg Aspect Ratio: {weighted_avg_aspect_ratio:.2f}", True, (255, 255, 255))
+            window.blit(aspect_ratio_surface, (start_x, y_pos))
+            y_pos += spacing
+
+        # Draw Average Neighbors Over Time Graph
+        pygame.draw.rect(window, (30, 30, 30), average_graph_rect)  # Background for graph area
+        data = average_neighbors_over_time
+        data_length = len(data)
+        max_data_points = average_graph_rect.width  # Number of pixels in x-direction
+
+        if data_length > max_data_points:
+            data_to_plot = data[-max_data_points:]
+        else:
+            data_to_plot = data
+
+        x_scale = average_graph_rect.width / max_data_points
+        y_min = 0
+        y_max = 6
+        y_range = y_max - y_min
+        y_scale = (average_graph_rect.height - 40) / y_range  # Leave space for labels
+
+        points = []
+
+        for i, value in enumerate(data_to_plot):
+            x = average_graph_rect.left + i * x_scale
+            y = average_graph_rect.bottom - 20 - (value - y_min) * y_scale
+            points.append((x, y))
+
+        if len(points) >= 2:
+            pygame.draw.lines(window, (0, 255, 0), False, points, 2)  # Green line
+
+        # Draw labels and axes for average neighbors graph
+        text_surface = font.render("Average Neighbors Over Time", True, (255, 255, 255))
+        window.blit(text_surface, (average_graph_rect.left + 10, average_graph_rect.top + 10))
+
+        # Draw y-axis labels
+        for i in range(int(y_min), int(y_max) + 1):
+            y = average_graph_rect.bottom - 20 - (i - y_min) * y_scale
+            label_surface = font.render(str(i), True, (255, 255, 255))
+            window.blit(label_surface, (average_graph_rect.left + 5, y - 8))
+            pygame.draw.line(window, (100, 100, 100), (average_graph_rect.left + 30, y), (average_graph_rect.right, y), 1)
+
+        # Draw Cumulative Neighbor Proportions Graph
+        pygame.draw.rect(window, (30, 30, 30), cumulative_graph_rect)  # Background for graph area
+        neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(7)])
+        data_length = neighbor_counts_array.shape[1]
+
+        max_data_points = cumulative_graph_rect.width  # Number of pixels in x-direction
+
+        if data_length > max_data_points:
+            neighbor_counts_array = neighbor_counts_array[:, -max_data_points:]
+            data_length = max_data_points
+
+        cumulative_counts_array = np.cumsum(neighbor_counts_array, axis=0)
+        cumulative_proportions_array = cumulative_counts_array / N  # Convert to proportions
+
+        x_scale = cumulative_graph_rect.width / max_data_points
+        y_scale = (cumulative_graph_rect.height - 40)  # Leave space for labels
+
+        # Draw cumulative proportions for each neighbor count
+        for neighbor in range(6, -1, -1):  # Draw from 6 to 0 neighbors
+            data = cumulative_proportions_array[neighbor]
+            points = []
+            for i, value in enumerate(data):
+                x = cumulative_graph_rect.left + i * x_scale
+                y = cumulative_graph_rect.bottom - 20 - value * y_scale
+                points.append((x, y))
+            if len(points) >= 2:
+                pygame.draw.lines(window, neighbor_colors[neighbor], False, points, 2)
+
+        # Draw labels and axes for cumulative neighbor proportions graph
+        text_surface = font.render("Cumulative Neighbor Proportions Over Time", True, (255, 255, 255))
+        window.blit(text_surface, (cumulative_graph_rect.left + 10, cumulative_graph_rect.top + 10))
+
+        # Draw legend for cumulative graph
+        legend_y = cumulative_graph_rect.top + 30
+        legend_x = cumulative_graph_rect.left + 10
+        for neighbor in range(7):
+            color = neighbor_colors[neighbor]
+            label = neighbor_labels[neighbor]
+            pygame.draw.line(window, color, (legend_x, legend_y), (legend_x + 20, legend_y), 2)
+            label_surface = font.render(f"Neighbors = {label}", True, (255, 255, 255))
+            window.blit(label_surface, (legend_x + 25, legend_y - 8))
+            legend_y += 20
+
+        # Draw y-axis labels (0% to 100%) for cumulative graph
+        for i in range(0, 101, 20):
+            y = cumulative_graph_rect.bottom - 20 - (i / 100) * y_scale
+            label_surface = font.render(f"{i}%", True, (255, 255, 255))
+            window.blit(label_surface, (cumulative_graph_rect.left + 5, y - 8))
+            pygame.draw.line(window, (100, 100, 100), (cumulative_graph_rect.left + 30, y), (cumulative_graph_rect.right, y), 1)
+
+        # Draw numbering labels to clusters on the simulation area
+        pos_np = pos.copy()
+        for cluster_idx in range(total_clusters):
+            indices = np.where(assignments == cluster_idx)[0]
+            if len(indices) > 0:
+                cluster_positions = pos_np[indices]
+                centroid = np.mean(cluster_positions, axis=0)
+                centroid = np.clip(centroid, 0.05, 0.95)
+                text_surface = font.render(str(cluster_idx + 1), True, (255, 255, 255))
+                screen_pos = (int(centroid[0] * res), int(centroid[1] * res))
+                window.blit(text_surface, screen_pos)
+
+        pygame.display.flip()
+        
+        # Capture the screen and write to video
+        if record_video:
+            # Capture the screen
+            frame = pygame.surfarray.array3d(window)
+            # Convert from (width, height, 3) to (height, width, 3)
+            frame = np.transpose(frame, (1, 0, 2))
+            # Convert RGB to BGR
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            # Write frame to video
+            video_writer.write(frame)
+            video_frames_written += 1
+
+        clock.tick(30)  # Limit to 30 FPS
+
+    # When the simulation ends, ensure the video writer is released
+    if video_writer is not None:
+        video_writer.release()
+
+    pygame.quit()
+    sys.exit()
