@@ -3,24 +3,25 @@ import pygame
 import sys
 import math
 import matplotlib.pyplot as plt
-import cv2  # Import OpenCV for video writing
-import json  # Import json for saving/loading key press data
+import cv2  # For video writing
+import json  # For saving/loading key press data
 import os   # For file path operations
 
 # Set the mode: 'write', 'read', or 'simulation'
-# mode = 'write'  # Default to 'write' mode. Change to 'read' to replay simulation.
-# mode = 'read'  # Default to 'write' mode. Change to 'read' to replay simulation.
-mode = 'simulation'  # New 'simulation' mode for ML-based control
+# Uncomment the desired mode
+# mode = 'write'       # Record key presses
+# mode = 'read'        # Replay simulation based on recorded key presses
+mode = 'simulation'    # ML-based control to optimize action timing
 
 # Constants and Initialization
 PI = 3.1415926
 res = 512  # Simulation area size (512x512 pixels)
-dashboard_width = 400  # Width for each dashboard area
+dashboard_width = 400  # Width for the dashboard area
 
 # Define dashboard heights
-text_dashboard_height = 300  # Height for the text dashboard
-average_graph_height = 200    # Height for the average neighbors graph
-cumulative_graph_height = 200 # Height for the cumulative neighbor proportions graph
+text_dashboard_height = 300  # Height for displaying text information
+average_graph_height = 200   # Height for the average neighbors graph
+cumulative_graph_height = 200  # Height for the cumulative neighbor proportions graph
 
 # Calculate window dimensions
 window_width = res + dashboard_width
@@ -36,47 +37,52 @@ clock = pygame.time.Clock()
 record_video = True  # Set to True to record video
 video_filename = 'simulation_video.mp4'
 video_writer = None
-video_fps = 30  # Assuming 30 FPS
-video_frames_written = 0
+video_fps = 30  # Frames per second
 
 if record_video:
     frame_width = window_width
     frame_height = window_height
-    # Use 'mp4v' codec instead of 'XVID' for better compatibility
-    video_writer = cv2.VideoWriter(video_filename, cv2.VideoWriter_fourcc(*'mp4v'), video_fps, (frame_width, frame_height))
+    # Use 'mp4v' codec for better compatibility
+    video_writer = cv2.VideoWriter(
+        video_filename,
+        cv2.VideoWriter_fourcc(*'mp4v'),
+        video_fps,
+        (frame_width, frame_height)
+    )
 
 # Simulation Parameters
 paused = False
-N = 9  # Number of particles (changed to 60 for equal splitting into 3 clusters)
-particle_m_max = 5.0  # Mass
+running = True  # Flag to control the main loop
+N = 12  # Number of particles (changed to 12)
+particle_m_max = 5.0  # Maximum mass of particles
 nest_size = 0.6  # Nest size
-particle_radius_max = 10.0 / float(res)  # Particle radius for rendering (~0.0195)
+particle_radius_max = 10.0 / float(res)  # Maximum particle radius (~0.0195)
 init_vel = 100  # Initial velocity
 
 h = 1e-5  # Time step
 substepping = 3  # Number of sub-iterations within a time step
 
 # Set the distance threshold for clustering
-d = 1.5 * particle_radius_max  # Moved here to make 'd' a global variable
+d = 1.5 * particle_radius_max  # Global variable 'd'
 
-# Fields
-pos = np.zeros((N, 2), dtype=np.float32)
-vel = np.zeros((N, 2), dtype=np.float32)
-force = np.zeros((N, 2), dtype=np.float32)
+# Fields for particle properties
+pos = np.zeros((N, 2), dtype=np.float32)  # Positions
+vel = np.zeros((N, 2), dtype=np.float32)  # Velocities
+force = np.zeros((N, 2), dtype=np.float32)  # Forces
 
-particle_radius = np.zeros(N, dtype=np.float32)
-particle_m = np.zeros(N, dtype=np.float32)
+particle_radius = np.zeros(N, dtype=np.float32)  # Radii
+particle_m = np.zeros(N, dtype=np.float32)  # Masses
 
-energy = np.zeros(2, dtype=np.float32)  # [1] current energy [0] initial energy
-particle_color = np.zeros((N, 3), dtype=np.float32)
+energy = np.zeros(2, dtype=np.float32)  # [1] current energy, [0] initial energy
+particle_color = np.zeros((N, 3), dtype=np.float32)  # Colors (not used in rendering)
 
 # Acoustic properties
-po = 10e6  # Acoustic pressure
+po = 10e7  # Acoustic pressure
 
-ax = np.array([1.0])
-ay = np.array([1.0])
-kx = np.array([3], dtype=int)
-ky = np.array([1], dtype=int)
+ax = np.array([1.0])  # Amplitude in x-direction
+ay = np.array([1.0])  # Amplitude in y-direction
+kx = np.array([1], dtype=int)  # Wave number in x-direction (initially 1)
+ky = np.array([1], dtype=int)  # Wave number in y-direction
 
 ax_field = ax
 ay_field = ay
@@ -90,14 +96,14 @@ num_waves_y = len(ay)
 drag = 3e6
 
 # Clustering variables
-neighbors = np.zeros(N, dtype=np.int32)
-particle_node_assignments = np.full(N, -1, dtype=np.int32)
-cluster_id = 0
+neighbors = np.zeros(N, dtype=np.int32)  # Number of neighbors for each particle
+particle_node_assignments = np.full(N, -1, dtype=np.int32)  # Cluster assignments
+cluster_id = 0  # Current cluster ID
 
 # For plotting
-average_neighbors_over_time = []
-neighbor_count_over_time = {i: [] for i in range(7)}
-neighbor_counts_field = np.zeros(7, dtype=np.int32)
+average_neighbors_over_time = []  # Track average neighbors over time
+neighbor_count_over_time = {i: [] for i in range(7)}  # Track counts of neighbor numbers over time
+neighbor_counts_field = np.zeros(7, dtype=np.int32)  # Field to store neighbor counts
 weighted_avg_density_over_time = []  # List to store weighted average cluster density over time
 weighted_avg_aspect_ratio_over_time = []  # List to store weighted average aspect ratio over time
 
@@ -124,62 +130,10 @@ def initialize():
     energy[0] = 0.0
     energy[1] = 0.0
     for i in range(N):
-        theta = np.random.rand() * 2 * PI
-        r = (np.sqrt(np.random.rand()) * 0.7 + 0.3) * nest_size
-        pos[i] = np.array([np.random.rand(), np.random.rand()])
-        offset = init_vel * r * np.array([np.cos(theta), np.sin(theta)])
-        vel[i] = np.array([-offset[1], offset[0]])
-
+        pos[i] = np.random.rand(2)
+        vel[i] = np.zeros(2)
         particle_radius[i] = 0.5 * particle_radius_max
-        particle_m[i] = (particle_radius[i] / particle_radius_max)**2 * particle_m_max
-
-        energy[0] += 0.5 * particle_m[i] * np.sum(vel[i]**2)
-        energy[1] += 0.5 * particle_m[i] * np.sum(vel[i]**2)
-
-        # particle_color[i] = 1 - particle_m[i] / particle_m_max  # Not used in rendering
-
-# Initialize particles in a hexagonal cluster
-cluster_x = 1/6
-cluster_y = 1/2
-cluster_radius = particle_radius_max
-
-def initialize_cluster():
-    global energy
-    energy[0] = 0.0
-    energy[1] = 0.0
-    theta = 0.0
-    curr = np.array([cluster_x, cluster_y])
-    pos[0] = curr.copy()
-    index = 1
-    layer = 1
-
-    while index < N:
-        curr += cluster_radius * np.array([np.cos(theta), np.sin(theta)])
-        for j in range(2, 8):
-            angle = j * PI / 3 + theta
-            for _ in range(layer):
-                curr += cluster_radius * np.array([np.cos(angle), np.sin(angle)])
-                if index < N:
-                    pos[index] = curr.copy()
-                    index += 1
-                else:
-                    break
-            if index >= N:
-                break
-        layer += 1
-
-    for i in range(N):
-        theta = np.random.rand() * 2 * PI
-        r = (np.sqrt(np.random.rand()) * 0.7 + 0.3) * nest_size
-        offset = init_vel * r * np.array([np.cos(theta), np.sin(theta)])
-        vel[i] = np.array([-offset[1], offset[0]])
-
-        particle_radius[i] = 0.5 * particle_radius_max
-        particle_m[i] = (particle_radius[i] / particle_radius_max)**2 * particle_m_max
-
-        energy[0] += 0.5 * particle_m[i] * np.sum(vel[i]**2)
-        energy[1] += 0.5 * particle_m[i] * np.sum(vel[i]**2)
-
+        particle_m[i] = (particle_radius[i] / particle_radius_max) ** 2 * particle_m_max
         particle_color[i] = 0.3 + 0.7 * np.random.rand(3)
 
 # Compute forces acting on particles
@@ -193,10 +147,10 @@ def compute_force():
         f_y = 0.0
 
         for wave in range(num_waves_x):
-            f_x += particle_radius[i]**3 * 1e6 * ax_field[wave] * np.sin(2 * PI * pos[i][0] * kx_field[wave])
+            f_x += particle_radius[i] ** 3 * 1e6 * ax_field[wave] * np.sin(2 * PI * pos[i][0] * kx_field[wave])
 
         for wave in range(num_waves_y):
-            f_y += particle_radius[i]**3 * 1e6 * ay_field[wave] * np.sin(2 * PI * pos[i][1] * ky_field[wave])
+            f_y += particle_radius[i] ** 3 * 1e6 * ay_field[wave] * np.sin(2 * PI * pos[i][1] * ky_field[wave])
 
         f_vector = np.array([f_x, f_y]) * po
         force[i] += f_vector
@@ -216,7 +170,7 @@ def compute_collision_force():
     collision_force = np.zeros_like(force)
     EPSILON = 1e-4
     DAMPING = 0.1
-    K = 1e11  # Stiffness constant (you may need to adjust this value)
+    K = 1e11  # Stiffness constant
 
     # Calculate pairwise differences and distances
     diff = pos[:, np.newaxis, :] - pos[np.newaxis, :, :]  # Shape (N, N, 2)
@@ -227,7 +181,7 @@ def compute_collision_force():
     overlap = np.maximum(overlap, 0)  # Only positive overlaps (compressions)
 
     # Normal force magnitude (Hertzian contact model)
-    normal_force_magnitude = K * overlap ** (3/2)  # Shape (N, N)
+    normal_force_magnitude = K * overlap ** (3 / 2)  # Shape (N, N)
 
     # Compute unit vectors along diff
     normal_vector = diff / r[..., np.newaxis]  # Shape (N, N, 2)
@@ -277,7 +231,7 @@ def update():
 def compute_energy():
     energy[1] = 0.0
     for i in range(N):
-        energy[1] += 0.5 * particle_m[i] * np.sum(vel[i]**2)
+        energy[1] += 0.5 * particle_m[i] * np.sum(vel[i] ** 2)
 
 # Clustering logic
 def calculate_neighbors_and_init_clusters(d):
@@ -304,10 +258,7 @@ def expand_cluster(cluster_id_value, particle_id, d):
                 if r < particle_radius[current_particle] + particle_radius[j] + 2e-3:
                     particle_node_assignments[j] = cluster_id_value
                     stack.append(j)
-        for j in range(N):
-            if particle_node_assignments[j] == -1:
-                r = np.linalg.norm(pos[j] - pos[current_particle])
-                if r < d:
+                elif r < d:
                     particle_node_assignments[j] = cluster_id_value
                     stack.append(j)
 
@@ -422,18 +373,18 @@ def calculate_aspect_ratios():
 def plot_average_neighbors_over_time():
     plt.figure(figsize=(10, 6))
     plt.plot(average_neighbors_over_time, label="Average Neighbors Over Time", color="blue", linewidth=2)
-    
+
     # Add vertical lines at key_press_data_indices
     for idx, data_index in enumerate(key_press_data_indices):
         plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-    
+
     plt.xlabel("Data Index")
     plt.ylabel("Average Number of Neighbors")
     plt.title("Average Neighbors Over Time")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    
+
     # Save the figure
     filename = f"average_neighbors_over_time_{mode}.png"
     plt.savefig(filename)
@@ -442,31 +393,31 @@ def plot_average_neighbors_over_time():
 
 def plot_neighbor_distribution_over_time():
     plt.figure(figsize=(10, 6))
-    
+
     # Number of neighbor categories
     max_neighbors = 6
-    
+
     # Convert the neighbor_count_over_time to a numpy array for easier manipulation
     neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(7)])
-    
+
     # Compute cumulative counts along the time axis (axis=0)
     cumulative_counts = np.cumsum(neighbor_counts_array, axis=0)
-    
+
     # Plot each cumulative count
     for i in range(max_neighbors + 1):
         plt.plot(cumulative_counts[i], label=f"Up to {i} neighbors", linewidth=2)
-    
+
     # Add vertical lines at key_press_data_indices
     for idx, data_index in enumerate(key_press_data_indices):
         plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-    
+
     plt.xlabel("Data Index")
     plt.ylabel("Number of Particles")
     plt.title("Cumulative Neighbor Distribution Over Time")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    
+
     # Save the figure
     filename = f"neighbor_distribution_over_time_{mode}.png"
     plt.savefig(filename)
@@ -476,18 +427,18 @@ def plot_neighbor_distribution_over_time():
 def plot_weighted_avg_density_over_time():
     plt.figure(figsize=(10, 6))
     plt.plot(weighted_avg_density_over_time, label="Weighted Avg Cluster Density Over Time", color="purple", linewidth=2)
-    
+
     # Add vertical lines at key_press_data_indices
     for idx, data_index in enumerate(key_press_data_indices):
         plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-    
+
     plt.xlabel("Data Index")
     plt.ylabel("Weighted Average Cluster Density")
     plt.title("Weighted Average Cluster Density Over Time")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    
+
     # Save the figure
     filename = f"weighted_avg_density_over_time_{mode}.png"
     plt.savefig(filename)
@@ -497,18 +448,18 @@ def plot_weighted_avg_density_over_time():
 def plot_weighted_avg_aspect_ratio_over_time():
     plt.figure(figsize=(10, 6))
     plt.plot(weighted_avg_aspect_ratio_over_time, label="Weighted Avg Aspect Ratio Over Time", color="orange", linewidth=2)
-    
+
     # Add vertical lines at key_press_data_indices
     for idx, data_index in enumerate(key_press_data_indices):
         plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-    
+
     plt.xlabel("Data Index")
     plt.ylabel("Weighted Average Aspect Ratio")
     plt.title("Weighted Average Aspect Ratio Over Time")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    
+
     # Save the figure
     filename = f"weighted_avg_aspect_ratio_over_time_{mode}.png"
     plt.savefig(filename)
@@ -516,8 +467,8 @@ def plot_weighted_avg_aspect_ratio_over_time():
     plt.close()
 
 # Initialize the simulation
-initialize_cluster()
-xchanging = True
+initialize()
+xchanging = True  # Flag to indicate whether changing kx or ky
 message = "Changing number of nodes along X-axis"
 
 # Colors for clusters
@@ -538,6 +489,7 @@ colors = [
 ]
 
 def adjust_brightness(color, factor):
+    """Adjust the brightness of a color."""
     r = (color >> 16) & 0xFF
     g = (color >> 8) & 0xFF
     b = color & 0xFF
@@ -559,23 +511,24 @@ cumulative_graph_rect = pygame.Rect(res, text_dashboard_height + average_graph_h
 
 # Colors for neighbor counts in cumulative graph
 neighbor_colors = [
-    (255, 0, 0),    # Red for 0 neighbors
-    (255, 165, 0),  # Orange for 1 neighbor
-    (255, 255, 0),  # Yellow for 2 neighbors
-    (0, 255, 0),    # Green for 3 neighbors
-    (0, 127, 255),  # Light blue for 4 neighbors
-    (0, 0, 255),    # Blue for 5 neighbors
-    (139, 0, 255),  # Purple for 6 neighbors
+    (255, 0, 0),     # Red for 0 neighbors
+    (255, 165, 0),   # Orange for 1 neighbor
+    (255, 255, 0),   # Yellow for 2 neighbors
+    (0, 255, 0),     # Green for 3 neighbors
+    (0, 127, 255),   # Light blue for 4 neighbors
+    (0, 0, 255),     # Blue for 5 neighbors
+    (139, 0, 255),   # Purple for 6 neighbors
 ]
 
 neighbor_labels = ["0", "1", "2", "3", "4", "5", "6"]
 
 def process_key_press(key):
+    """Process key presses to control simulation parameters."""
     global xchanging, message, kx_field, ky_field, kx, ky, paused, running, key_press_data_indices, record_video, video_writer
     if key == pygame.K_ESCAPE:
         running = False
     elif key == pygame.K_r:
-        initialize_cluster()
+        initialize()
     elif key == pygame.K_SPACE:
         paused = not paused
     elif key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9]:
@@ -602,7 +555,6 @@ def process_key_press(key):
         if record_video and video_writer is not None:
             video_writer.release()
             video_writer = None
-            record_video = False  # Stop recording
             print(f"Video saved as {video_filename}")
         if mode == 'write':
             # Save key_press_data to file
@@ -611,206 +563,171 @@ def process_key_press(key):
             print("Key press data saved to key_press_data.txt")
         elif mode == 'read':
             # In 'read' mode, when 'g' is pressed, we stop the simulation
-            pass  # We will set running = False after processing all key presses
+            running = False
         elif mode == 'simulation':
             # In 'simulation' mode, when 'g' is pressed, we stop the simulation
-            pass
-        # Do not set running = False here, as we need to continue to render the final frame
+            running = False
 
 ####################################################################################
-# New ML code for 'simulation' mode begins here
+# ML code for 'simulation' mode begins here
 
-# Function to compute the loss based on the current particle positions
-def compute_loss():
+# Function to compute the reward based on the current particle positions
+def compute_reward(total_steps):
     # Run clustering to identify clusters
-    d = 1.5 * particle_radius_max  # Use same distance threshold
-    run_clustering(d)
-    # Goal is to split particles into 3 equal clusters
-    target_num_clusters = 3
-    target_cluster_size = N / target_num_clusters  # Should be 20 particles per cluster
-    # Compute loss as sum of squared differences between actual cluster sizes and target
-    cluster_sizes = []
-    for cluster_idx in range(cluster_id):
-        indices = np.where(particle_node_assignments == cluster_idx)[0]
-        cluster_sizes.append(len(indices))
-    # Include unassigned particles as separate clusters
-    unassigned_indices = np.where(particle_node_assignments == -1)[0]
-    if len(unassigned_indices) > 0:
-        cluster_sizes.extend([1]*len(unassigned_indices))
-    # If number of clusters is less than target, add penalties
-    num_clusters = len(cluster_sizes)
-    loss = 0.0
-    if num_clusters < target_num_clusters:
-        loss += (target_num_clusters - num_clusters) * 1000  # Large penalty
-    # If number of clusters is more than target, add penalties
-    if num_clusters > target_num_clusters:
-        loss += (num_clusters - target_num_clusters) * 1000  # Large penalty
-    # Compute squared differences
-    for size in cluster_sizes:
-        loss += (size - target_cluster_size) ** 2
-    return loss
+    d_local = d  # Use same distance threshold
+    run_clustering(d_local)
+    # Define groups based on x-coordinate
+    group1 = pos[:, 0] < 0.5
+    group2 = pos[:, 0] >= 0.5
+    fraction_group1 = np.sum(group1) / N
+    fraction_group2 = np.sum(group2) / N
+    reward = (-10000 * abs(fraction_group1 - fraction_group2)) - total_steps
+    return reward, fraction_group1, fraction_group2
 
-# Function to run the simulation with given actions and return the loss
-def run_simulation_with_actions(actions, render=False):
-    global pos, vel, kx_field, ky_field, key_press_data_indices, average_neighbors_over_time, neighbor_count_over_time, weighted_avg_density_over_time, weighted_avg_aspect_ratio_over_time, time_step, cluster_id, paused, running
-    d_local = d  # Use the global 'd'
+# Function to run the simulation with a given action time step and return the reward
+def run_simulation_with_action(action_time_step, render=True):
+    global pos, vel, kx_field, ky_field, time_step, paused, running, key_press_data, cluster_id, particle_node_assignments
     # Reset simulation state
-    initialize_cluster()
-    pos_initial = pos.copy()
-    vel_initial = vel.copy()
-    # Clear previous data
-    key_press_data_indices = []
-    average_neighbors_over_time = []
-    for i in neighbor_count_over_time:
-        neighbor_count_over_time[i] = []
-    weighted_avg_density_over_time = []
-    weighted_avg_aspect_ratio_over_time = []
+    initialize()
+    kx_field[0] = kx[0] = 1  # Start with kx = 1
     time_step = 0
+    total_steps = 0
+    action_taken = False
     cluster_id = 0
+    particle_node_assignments[:] = -1  # Reset cluster assignments
 
-    # Define action time steps
-    action_time_steps = [1000, 2000, 3000]  # You can adjust these values
-    action_index = 0  # Index of the current action
-
-    # Main simulation loop
-    max_time_steps = 4000  # Total simulation time steps
-    running = True
-    while time_step < max_time_steps and running:
-        # Handle events to keep the window responsive
-        if render:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                    pygame.quit()
-                    sys.exit()
-                elif event.type == pygame.KEYDOWN:
-                    key_name = pygame.key.name(event.key)
-                    process_key_press(event.key)
-
-        # Apply action if it's time
-        if action_index < len(actions) and time_step == action_time_steps[action_index]:
-            # Apply action
-            kx_field[0] = kx[0] = int(actions[action_index][0])
-            ky_field[0] = ky[0] = int(actions[action_index][1])
-            key_press_data_indices.append(len(average_neighbors_over_time))
-            action_index += 1
-
+    sim_running = True
+    while sim_running:
         if not paused:
             for _ in range(substepping):
                 compute_force()
                 update()
                 compute_energy()
                 calc_neighbors()
-                run_clustering(d_local)
+                run_clustering(d)
                 update_average_neighbors()
                 update_neighbor_count_over_time()
-                calculate_weighted_avg_density()  # Update density over time
-                cluster_aspect_ratios = calculate_aspect_ratios()  # Calculate aspect ratios
+                calculate_weighted_avg_density()
+                cluster_aspect_ratios = calculate_aspect_ratios()
 
             time_step += 1
+            total_steps += 1
+
+            # Apply action if it's time and action hasn't been taken yet
+            if not action_taken and time_step >= action_time_step:
+                kx_field[0] = kx[0] = 2  # Change kx to 2
+                action_taken = True
+                action_taken_time = time_step
+
+            # If action has been taken, check if 200 steps have passed since then
+            if action_taken and time_step >= action_taken_time + 200:
+                # Compute reward
+                reward, fraction_group1, fraction_group2 = compute_reward(total_steps)
+                print(f"Action taken at step {action_time_step}: Reward = {reward}")
+                return reward, action_time_step, fraction_group1, fraction_group2
 
             # Render the simulation if required
             if render:
                 render_simulation(cluster_aspect_ratios)
-                clock.tick(30)  # Limit to 30 FPS
-
-    # Compute loss at the end of simulation
-    loss = compute_loss()
-
-    # Restore initial state (optional)
-    pos = pos_initial.copy()
-    vel = vel_initial.copy()
-
-    return loss
+                # Process events
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        sim_running = False
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            sim_running = False
+                clock.tick(60)  # Limit to 60 FPS
 
 # Gradient descent optimization function
-def optimize_actions():
-    # Initialize actions (kx and ky values at each action time step)
-    num_actions = 3  # Number of actions (maximum 3 moves)
-    actions = np.array([[1, 1]] * num_actions, dtype=float)  # Start with kx=1, ky=1
+def optimize_action():
+    # Initial guesses for action time steps
+    initial_guesses = [50, 100, 200, 300, 400, 500, 700, 1000]
+    best_reward = None
+    best_action_time_step = None
 
-    learning_rate = 0.1  # Learning rate for gradient descent
-    num_iterations = 20  # Number of gradient descent iterations
+    print("Evaluating initial guesses...")
+    for guess in initial_guesses:
+        reward, action_time_step, fraction_group1, fraction_group2 = run_simulation_with_action(guess, render=False)
+        print(f"Action at step {action_time_step}: Reward = {reward}, Group1 fraction = {fraction_group1:.2f}, Group2 fraction = {fraction_group2:.2f}")
+        if best_reward is None or reward > best_reward:
+            best_reward = reward
+            best_action_time_step = action_time_step
 
-    for iteration in range(num_iterations):
-        print(f"Optimization iteration {iteration+1}/{num_iterations}")
-        # Compute current loss with rendering
-        current_loss = run_simulation_with_actions(actions, render=True)
-        print(f"Current loss: {current_loss}")
+    # Use the best initial guess for gradient descent
+    action_time_step = best_action_time_step
+    learning_rate = 10  # Adjust the time step by this amount
+    previous_reward = best_reward
 
-        # Initialize gradients
-        gradients = np.zeros_like(actions)
+    print("\nStarting gradient descent optimization...")
+    while True:
+        # Try action earlier
+        earlier_action_time_step = max(1, action_time_step - learning_rate)
+        reward_earlier, _, _, _ = run_simulation_with_action(earlier_action_time_step, render=False)
+        # Try action later
+        later_action_time_step = action_time_step + learning_rate
+        reward_later, _, _, _ = run_simulation_with_action(later_action_time_step, render=False)
 
-        # Compute gradients using finite differences
-        delta = 0.1  # Small change for finite differences
-        for i in range(num_actions):
-            for j in range(2):  # For kx and ky
-                original_value = actions[i][j]
+        # Print the rewards
+        print(f"Trying action at step {earlier_action_time_step}: Reward = {reward_earlier}")
+        print(f"Trying action at step {later_action_time_step}: Reward = {reward_later}")
 
-                # Positive perturbation
-                actions[i][j] = original_value + delta
-                loss_plus = run_simulation_with_actions(actions, render=False)
-
-                # Negative perturbation
-                actions[i][j] = original_value - delta
-                loss_minus = run_simulation_with_actions(actions, render=False)
-
-                # Restore original value
-                actions[i][j] = original_value
-
-                # Compute gradient
-                gradient = (loss_plus - loss_minus) / (2 * delta)
-                gradients[i][j] = gradient
-
-        # Update actions using gradients
-        actions -= learning_rate * gradients
-
-        # Ensure actions are within valid range (1 to 9)
-        actions = np.clip(actions, 1, 9)
-
-    # After optimization, run the simulation one more time with optimized actions and rendering
-    final_loss = run_simulation_with_actions(actions, render=True)
-    print(f"Final optimized loss: {final_loss}")
-    print(f"Optimized actions: {actions}")
-
-    # Convert actions to key presses (integers)
-    key_presses = []
-    for action in actions:
-        kx_value = int(round(action[0]))
-        ky_value = int(round(action[1]))
-        key_presses.append((kx_value, ky_value))
+        # Check if moving earlier improves the reward
+        if reward_earlier > previous_reward:
+            action_time_step = earlier_action_time_step
+            previous_reward = reward_earlier
+            print(f"Action time updated to {action_time_step} (earlier)")
+            continue
+        # Check if moving later improves the reward
+        elif reward_later > previous_reward:
+            action_time_step = later_action_time_step
+            previous_reward = reward_later
+            print(f"Action time updated to {action_time_step} (later)")
+            continue
+        else:
+            # Neither earlier nor later improves the reward; optimal time found
+            print("\nOptimal action time found.")
+            print(f"Final action at step {action_time_step}: Reward = {previous_reward}")
+            # Run the simulation one more time with rendering
+            reward, _, fraction_group1, fraction_group2 = run_simulation_with_action(action_time_step, render=True)
+            print(f"Final fractions: Group1 = {fraction_group1:.2f}, Group2 = {fraction_group2:.2f}")
+            break
 
     # Output the key presses similar to 'write' mode
     key_press_data.clear()
-    action_time_steps = [1000, 2000, 3000]
-    for i, (kx_value, ky_value) in enumerate(key_presses):
-        time_step_action = action_time_steps[i]
-        # Record key presses for 'x' and number
-        key_press_data.append((time_step_action, 'x'))
-        key_press_data.append((time_step_action + 1, str(kx_value)))
-        # Record key presses for 'y' and number
-        key_press_data.append((time_step_action + 2, 'y'))
-        key_press_data.append((time_step_action + 3, str(ky_value)))
+    # Record key presses for 'x' and number '2' at the action time step
+    key_press_data.append((action_time_step, 'x'))
+    key_press_data.append((action_time_step + 1, '2'))
 
     # Save key_press_data to file
-    with open('key_press_data_simulation.txt', 'w') as f:
+    with open('key_press_data.txt', 'w') as f:
         json.dump(key_press_data, f)
-    print("Optimized key press data saved to key_press_data_simulation.txt")
+    print("Optimized key press data saved to key_press_data.txt")
+    print(f"Optimal action time step: {action_time_step}")
 
 # Function to render the simulation
 def render_simulation(cluster_aspect_ratios):
     global assignments, cluster_id, pos
+    # Process events
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                pygame.quit()
+                sys.exit()
+
     # Clear the screen
     window.fill((17, 47, 65))  # Dark background
 
     # Draw pressure minima lines
     lines = []
-    for x_line in np.linspace(.5/kx[0], 1-.5/kx[0], kx[0]):
+    for x_line in np.linspace(.5 / kx[0], 1 - .5 / kx[0], kx[0]):
         start_pos = (int(x_line * res), 0)
         end_pos = (int(x_line * res), res)
         lines.append((start_pos, end_pos))
 
-    for y_line in np.linspace(.5/ky[0], 1-.5/ky[0], ky[0]):
+    for y_line in np.linspace(.5 / ky[0], 1 - .5 / ky[0], ky[0]):
         start_pos = (0, int(y_line * res))
         end_pos = (res, int(y_line * res))
         lines.append((start_pos, end_pos))
@@ -974,7 +891,7 @@ def render_simulation(cluster_aspect_ratios):
         if len(points) >= 2:
             pygame.draw.lines(window, neighbor_colors[neighbor], False, points, 2)
 
-    # Draw labels and axes for cumulative neighbor proportions graph
+    # Draw labels and axes for cumulative graph
     text_surface = font.render("Cumulative Neighbor Proportions Over Time", True, (255, 255, 255))
     window.blit(text_surface, (cumulative_graph_rect.left + 10, cumulative_graph_rect.top + 10))
 
@@ -988,13 +905,6 @@ def render_simulation(cluster_aspect_ratios):
         label_surface = font.render(f"Neighbors = {label}", True, (255, 255, 255))
         window.blit(label_surface, (legend_x + 25, legend_y - 8))
         legend_y += 20
-
-    # Draw y-axis labels (0% to 100%) for cumulative graph
-    for i in range(0, 101, 20):
-        y = cumulative_graph_rect.bottom - 20 - (i / 100) * y_scale
-        label_surface = font.render(f"{i}%", True, (255, 255, 255))
-        window.blit(label_surface, (cumulative_graph_rect.left + 5, y - 8))
-        pygame.draw.line(window, (100, 100, 100), (cumulative_graph_rect.left + 30, y), (cumulative_graph_rect.right, y), 1)
 
     # Draw numbering labels to clusters on the simulation area
     pos_np = pos.copy()
@@ -1010,22 +920,37 @@ def render_simulation(cluster_aspect_ratios):
 
     pygame.display.flip()
 
-# End of new ML code
+    # Capture the screen and write to video
+    if record_video:
+        # Capture the screen
+        frame = pygame.surfarray.array3d(window)
+        # Convert from (width, height, 3) to (height, width, 3)
+        frame = np.transpose(frame, (1, 0, 2))
+        # Convert RGB to BGR
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        # Write frame to video
+        video_writer.write(frame)
+
+# End of ML code
 ####################################################################################
 
 # Main simulation loop
 if mode == 'simulation':
     # In 'simulation' mode, run the optimization
-    optimize_actions()
-    # After optimization, you can switch to 'read' mode to replay the optimized actions
-    # Or continue to run the simulation with the optimized actions
-    # For simplicity, we will exit after optimization
+    optimize_action()
+    # After optimization, we can exit the program
+    # Release the video writer
+    if video_writer is not None:
+        video_writer.release()
+        video_writer = None
+        print(f"Video saved as {video_filename}")
     pygame.quit()
     sys.exit()
 else:
     running = True
     while running:
         if mode == 'write':
+            # In 'write' mode, capture key presses
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -1034,13 +959,14 @@ else:
                     key_press_data.append((time_step, key_name))
                     process_key_press(event.key)
         elif mode == 'read':
+            # In 'read' mode, replay recorded key presses
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
-            # Process virtual key presses
+            # Process virtual key presses from key_press_data
             while key_press_index < len(key_press_data) and key_press_data[key_press_index][0] == time_step:
                 key_name = key_press_data[key_press_index][1]
                 key = pygame.key.key_code(key_name)
@@ -1058,8 +984,8 @@ else:
                 run_clustering(d)
                 update_average_neighbors()
                 update_neighbor_count_over_time()
-                calculate_weighted_avg_density()  # Update density over time
-                cluster_aspect_ratios = calculate_aspect_ratios()  # Calculate aspect ratios
+                calculate_weighted_avg_density()
+                cluster_aspect_ratios = calculate_aspect_ratios()
 
             time_step += 1  # Increment the time step after each simulation step
 
@@ -1081,12 +1007,12 @@ else:
 
         # Draw pressure minima lines
         lines = []
-        for x_line in np.linspace(.5/kx[0], 1-.5/kx[0], kx[0]):
+        for x_line in np.linspace(.5 / kx[0], 1 - .5 / kx[0], kx[0]):
             start_pos = (int(x_line * res), 0)
             end_pos = (int(x_line * res), res)
             lines.append((start_pos, end_pos))
 
-        for y_line in np.linspace(.5/ky[0], 1-.5/ky[0], ky[0]):
+        for y_line in np.linspace(.5 / ky[0], 1 - .5 / ky[0], ky[0]):
             start_pos = (0, int(y_line * res))
             end_pos = (res, int(y_line * res))
             lines.append((start_pos, end_pos))
@@ -1239,7 +1165,7 @@ else:
             if len(points) >= 2:
                 pygame.draw.lines(window, neighbor_colors[neighbor], False, points, 2)
 
-        # Draw labels and axes for cumulative neighbor proportions graph
+        # Draw labels and axes for cumulative graph
         text_surface = font.render("Cumulative Neighbor Proportions Over Time", True, (255, 255, 255))
         window.blit(text_surface, (cumulative_graph_rect.left + 10, cumulative_graph_rect.top + 10))
 
@@ -1254,13 +1180,6 @@ else:
             window.blit(label_surface, (legend_x + 25, legend_y - 8))
             legend_y += 20
 
-        # Draw y-axis labels (0% to 100%) for cumulative graph
-        for i in range(0, 101, 20):
-            y = cumulative_graph_rect.bottom - 20 - (i / 100) * y_scale
-            label_surface = font.render(f"{i}%", True, (255, 255, 255))
-            window.blit(label_surface, (cumulative_graph_rect.left + 5, y - 8))
-            pygame.draw.line(window, (100, 100, 100), (cumulative_graph_rect.left + 30, y), (cumulative_graph_rect.right, y), 1)
-
         # Draw numbering labels to clusters on the simulation area
         pos_np = pos.copy()
         for cluster_idx in range(total_clusters):
@@ -1274,7 +1193,7 @@ else:
                 window.blit(text_surface, screen_pos)
 
         pygame.display.flip()
-        
+
         # Capture the screen and write to video
         if record_video:
             # Capture the screen
@@ -1285,13 +1204,14 @@ else:
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             # Write frame to video
             video_writer.write(frame)
-            video_frames_written += 1
 
         clock.tick(30)  # Limit to 30 FPS
 
     # When the simulation ends, ensure the video writer is released
     if video_writer is not None:
         video_writer.release()
+        video_writer = None
+        print(f"Video saved as {video_filename}")
 
     pygame.quit()
     sys.exit()
