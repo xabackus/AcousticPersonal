@@ -13,6 +13,8 @@ import os   # For file path operations
 # mode = 'read'        # Replay simulation based on recorded key presses
 mode = 'simulation'    # ML-based control to optimize action timing
 
+render_bool = True     # Boolean variable; controls whether simulation renders while running gradient descent
+
 # Constants and Initialization
 PI = 3.1415926
 res = 512  # Simulation area size (512x512 pixels)
@@ -585,7 +587,7 @@ def compute_reward(total_steps):
     return reward, fraction_group1, fraction_group2
 
 # Function to run the simulation with a given action time step and return the reward
-def run_simulation_with_action(action_time_step, render=True):
+def run_simulation_with_action(action_time_step, render=render_bool):
     global pos, vel, kx_field, ky_field, time_step, paused, running, key_press_data, cluster_id, particle_node_assignments
     # Reset simulation state
     initialize()
@@ -647,7 +649,7 @@ def optimize_action():
 
     print("Evaluating initial guesses...")
     for guess in initial_guesses:
-        reward, action_time_step, fraction_group1, fraction_group2 = run_simulation_with_action(guess, render=False)
+        reward, action_time_step, fraction_group1, fraction_group2 = run_simulation_with_action(guess, render=render_bool)
         print(f"Action at step {action_time_step}: Reward = {reward}, Group1 fraction = {fraction_group1:.2f}, Group2 fraction = {fraction_group2:.2f}")
         if best_reward is None or reward > best_reward:
             best_reward = reward
@@ -662,10 +664,10 @@ def optimize_action():
     while True:
         # Try action earlier
         earlier_action_time_step = max(1, action_time_step - learning_rate)
-        reward_earlier, _, _, _ = run_simulation_with_action(earlier_action_time_step, render=False)
+        reward_earlier, _, _, _ = run_simulation_with_action(earlier_action_time_step, render=render_bool)
         # Try action later
         later_action_time_step = action_time_step + learning_rate
-        reward_later, _, _, _ = run_simulation_with_action(later_action_time_step, render=False)
+        reward_later, _, _, _ = run_simulation_with_action(later_action_time_step, render=render_bool)
 
         # Print the rewards
         print(f"Trying action at step {earlier_action_time_step}: Reward = {reward_earlier}")
@@ -1005,205 +1007,8 @@ else:
         # Clear the screen
         window.fill((17, 47, 65))  # Dark background
 
-        # Draw pressure minima lines
-        lines = []
-        for x_line in np.linspace(.5 / kx[0], 1 - .5 / kx[0], kx[0]):
-            start_pos = (int(x_line * res), 0)
-            end_pos = (int(x_line * res), res)
-            lines.append((start_pos, end_pos))
-
-        for y_line in np.linspace(.5 / ky[0], 1 - .5 / ky[0], ky[0]):
-            start_pos = (0, int(y_line * res))
-            end_pos = (res, int(y_line * res))
-            lines.append((start_pos, end_pos))
-
-        for line in lines:
-            pygame.draw.line(window, (128, 128, 128), line[0], line[1], 1)  # Gray lines
-
-        # Draw particles
-        num_colors = len(colors)
-        for i in range(N):
-            cluster_id_i = assignments[i]
-            num_neighbors = neighbors[i]
-            brightness_factor = min(max(num_neighbors / 6, 0), 1)
-
-            if cluster_id_i == -1:
-                base_color = 0x808080  # Gray for unassigned particles
-            else:
-                base_color = colors[cluster_id_i % num_colors]
-
-            color = adjust_brightness(base_color, brightness_factor)
-
-            # Ensure positions are within [0,1]
-            pos_clipped = np.clip(pos[i], 0.0, 1.0)
-            screen_pos = (int(pos_clipped[0] * res), int(pos_clipped[1] * res))
-            radius = int(max(particle_radius[i] * res, 2))  # Minimum radius of 2 pixels for visibility
-            pygame.draw.circle(window, color, screen_pos, radius)
-
-        # Draw Text Dashboard
-        pygame.draw.rect(window, (30, 30, 30), text_area_rect)  # Background for text area
-
-        # Display cluster information
-        start_x = text_area_rect.left + 10
-        start_y = text_area_rect.top + 10  # Starting y position for text
-        spacing = 20  # Spacing between lines
-
-        # Render cluster information
-        y_pos = start_y
-        for cluster_idx in range(total_clusters):
-            aspect_ratio = cluster_aspect_ratios.get(cluster_idx, 1.0)
-            cluster_text = f"Cluster {cluster_idx + 1}: {counts[cluster_idx]} particles; aspect ratio = {aspect_ratio:.2f}"
-            if y_pos + spacing > text_area_rect.bottom:
-                break
-            text_surface = font.render(cluster_text, True, (255, 255, 255))
-            window.blit(text_surface, (start_x, y_pos))
-            y_pos += spacing
-
-        # Display unassigned particles
-        if y_pos + spacing <= text_area_rect.bottom:
-            cluster_text = f"Unassigned: {counts[total_clusters]} particles"
-            text_surface = font.render(cluster_text, True, (255, 255, 255))
-            window.blit(text_surface, (start_x, y_pos))
-            y_pos += spacing
-
-        # Display messages
-        if y_pos + spacing <= text_area_rect.bottom:
-            message_surface = font.render(message, True, (255, 255, 255))
-            window.blit(message_surface, (start_x, y_pos))
-            y_pos += spacing
-
-        # Display average neighbors
-        if y_pos + spacing <= text_area_rect.bottom:
-            avg_neighbors = average_neighbors_over_time[-1] if average_neighbors_over_time else 0
-            avg_neighbors_surface = font.render(f"Average Neighbors: {avg_neighbors:.2f}", True, (255, 255, 255))
-            window.blit(avg_neighbors_surface, (start_x, y_pos))
-            y_pos += spacing
-
-        # Display number of clusters
-        if y_pos + spacing <= text_area_rect.bottom:
-            num_clusters_surface = font.render(f"Number of Clusters: {total_clusters}", True, (255, 255, 255))
-            window.blit(num_clusters_surface, (start_x, y_pos))
-            y_pos += spacing
-
-        # Display weighted average cluster density
-        if y_pos + spacing <= text_area_rect.bottom:
-            weighted_avg_density = weighted_avg_density_over_time[-1] if weighted_avg_density_over_time else 0
-            density_surface = font.render(f"Weighted Avg Cluster Density: {weighted_avg_density:.4f}", True, (255, 255, 255))
-            window.blit(density_surface, (start_x, y_pos))
-            y_pos += spacing
-
-        # Display weighted average aspect ratio
-        if y_pos + spacing <= text_area_rect.bottom:
-            weighted_avg_aspect_ratio = weighted_avg_aspect_ratio_over_time[-1] if weighted_avg_aspect_ratio_over_time else 0
-            aspect_ratio_surface = font.render(f"Weighted Avg Aspect Ratio: {weighted_avg_aspect_ratio:.2f}", True, (255, 255, 255))
-            window.blit(aspect_ratio_surface, (start_x, y_pos))
-            y_pos += spacing
-
-        # Draw Average Neighbors Over Time Graph
-        pygame.draw.rect(window, (30, 30, 30), average_graph_rect)  # Background for graph area
-        data = average_neighbors_over_time
-        data_length = len(data)
-        max_data_points = average_graph_rect.width  # Number of pixels in x-direction
-
-        if data_length > max_data_points:
-            data_to_plot = data[-max_data_points:]
-        else:
-            data_to_plot = data
-
-        x_scale = average_graph_rect.width / max_data_points
-        y_min = 0
-        y_max = 6
-        y_range = y_max - y_min
-        y_scale = (average_graph_rect.height - 40) / y_range  # Leave space for labels
-
-        points = []
-
-        for i, value in enumerate(data_to_plot):
-            x = average_graph_rect.left + i * x_scale
-            y = average_graph_rect.bottom - 20 - (value - y_min) * y_scale
-            points.append((x, y))
-
-        if len(points) >= 2:
-            pygame.draw.lines(window, (0, 255, 0), False, points, 2)  # Green line
-
-        # Draw labels and axes for average neighbors graph
-        text_surface = font.render("Average Neighbors Over Time", True, (255, 255, 255))
-        window.blit(text_surface, (average_graph_rect.left + 10, average_graph_rect.top + 10))
-
-        # Draw y-axis labels
-        for i in range(int(y_min), int(y_max) + 1):
-            y = average_graph_rect.bottom - 20 - (i - y_min) * y_scale
-            label_surface = font.render(str(i), True, (255, 255, 255))
-            window.blit(label_surface, (average_graph_rect.left + 5, y - 8))
-            pygame.draw.line(window, (100, 100, 100), (average_graph_rect.left + 30, y), (average_graph_rect.right, y), 1)
-
-        # Draw Cumulative Neighbor Proportions Graph
-        pygame.draw.rect(window, (30, 30, 30), cumulative_graph_rect)  # Background for graph area
-        neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(7)])
-        data_length = neighbor_counts_array.shape[1]
-
-        max_data_points = cumulative_graph_rect.width  # Number of pixels in x-direction
-
-        if data_length > max_data_points:
-            neighbor_counts_array = neighbor_counts_array[:, -max_data_points:]
-            data_length = max_data_points
-
-        cumulative_counts_array = np.cumsum(neighbor_counts_array, axis=0)
-        cumulative_proportions_array = cumulative_counts_array / N  # Convert to proportions
-
-        x_scale = cumulative_graph_rect.width / max_data_points
-        y_scale = (cumulative_graph_rect.height - 40)  # Leave space for labels
-
-        # Draw cumulative proportions for each neighbor count
-        for neighbor in range(6, -1, -1):  # Draw from 6 to 0 neighbors
-            data = cumulative_proportions_array[neighbor]
-            points = []
-            for i, value in enumerate(data):
-                x = cumulative_graph_rect.left + i * x_scale
-                y = cumulative_graph_rect.bottom - 20 - value * y_scale
-                points.append((x, y))
-            if len(points) >= 2:
-                pygame.draw.lines(window, neighbor_colors[neighbor], False, points, 2)
-
-        # Draw labels and axes for cumulative graph
-        text_surface = font.render("Cumulative Neighbor Proportions Over Time", True, (255, 255, 255))
-        window.blit(text_surface, (cumulative_graph_rect.left + 10, cumulative_graph_rect.top + 10))
-
-        # Draw legend for cumulative graph
-        legend_y = cumulative_graph_rect.top + 30
-        legend_x = cumulative_graph_rect.left + 10
-        for neighbor in range(7):
-            color = neighbor_colors[neighbor]
-            label = neighbor_labels[neighbor]
-            pygame.draw.line(window, color, (legend_x, legend_y), (legend_x + 20, legend_y), 2)
-            label_surface = font.render(f"Neighbors = {label}", True, (255, 255, 255))
-            window.blit(label_surface, (legend_x + 25, legend_y - 8))
-            legend_y += 20
-
-        # Draw numbering labels to clusters on the simulation area
-        pos_np = pos.copy()
-        for cluster_idx in range(total_clusters):
-            indices = np.where(assignments == cluster_idx)[0]
-            if len(indices) > 0:
-                cluster_positions = pos_np[indices]
-                centroid = np.mean(cluster_positions, axis=0)
-                centroid = np.clip(centroid, 0.05, 0.95)
-                text_surface = font.render(str(cluster_idx + 1), True, (255, 255, 255))
-                screen_pos = (int(centroid[0] * res), int(centroid[1] * res))
-                window.blit(text_surface, screen_pos)
-
-        pygame.display.flip()
-
-        # Capture the screen and write to video
-        if record_video:
-            # Capture the screen
-            frame = pygame.surfarray.array3d(window)
-            # Convert from (width, height, 3) to (height, width, 3)
-            frame = np.transpose(frame, (1, 0, 2))
-            # Convert RGB to BGR
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            # Write frame to video
-            video_writer.write(frame)
+        # Render the simulation
+        render_simulation(cluster_aspect_ratios)
 
         clock.tick(30)  # Limit to 30 FPS
 
