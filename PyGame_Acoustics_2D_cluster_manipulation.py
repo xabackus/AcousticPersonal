@@ -437,7 +437,7 @@ neighbor_labels = ["0", "1", "2", "3", "4", "5", "6"]
 
 def process_key_press(key):
     """Process key presses to control simulation parameters."""
-    global xchanging, message, kx_field, ky_field, kx, ky, paused, running, key_press_data_indices, record_video, video_writer
+    global xchanging, message, kx_field, ky_field, kx, ky, paused, running, key_press_data_indices, record_video, video_writer, key_press_data
     if key == pygame.K_ESCAPE:
         running = False
     elif key == pygame.K_r:
@@ -450,14 +450,21 @@ def process_key_press(key):
             kx_field[0] = kx[0] = val
         else:
             ky_field[0] = ky[0] = val
-        # Record the current data index when a number key is pressed
-        key_press_data_indices.append(len(average_neighbors_over_time))
+        # Record the current time_step when a number key is pressed
+        key_press_data_indices.append(time_step)
+        # Record key press data
+        key_name = pygame.key.name(key)
+        key_press_data.append((time_step, key_name))
     elif key == pygame.K_x:
         xchanging = True
         message = "Changing number of nodes along X-axis"
+        # Record key press data
+        key_press_data.append((time_step, 'x'))
     elif key == pygame.K_y:
         xchanging = False
         message = "Changing number of nodes along Y-axis"
+        # Record key press data
+        key_press_data.append((time_step, 'y'))
     elif key == pygame.K_g:
         # Plot graphs using Matplotlib
         plot_average_neighbors_over_time()
@@ -480,193 +487,6 @@ def process_key_press(key):
         elif mode == 'simulation':
             # In 'simulation' mode, when 'g' is pressed, we stop the simulation
             running = False
-
-####################################################################################
-# ML code for 'simulation' mode begins here
-
-if mode == 'simulation':
-    # Input parameters
-    num_groups = 3  # Number of clusters to split the particles into
-    group_proportions = [1/3, 1/3, 1/3]  # Desired proportions for each group, must sum to 1
-    actions = [2, 3]  # Actions: changes to the number of nodes in x-direction
-    wait_time = 50
-    '''
-    initial_guesses = [
-        [50, 100],  # First guess: change to 2 at t=50, change to 3 at t=100
-        [100, 200],
-        [150, 300],
-        [200, 400],
-        [250, 500],
-        [300, 600],
-    ]
-    '''
-    initial_guesses = []
-    for i in range(50,100,10):
-        for j in range(i+1,i + 51):
-            initial_guesses.append([i,j])
-    
-
-# Function to compute the reward based on the current particle positions
-def compute_reward(total_steps):
-    # Run clustering to identify clusters
-    d_local = d  # Use same distance threshold
-    run_clustering(d_local)
-    # Get the number of clusters detected
-    num_detected_clusters = cluster_id
-    # Get counts of particles in each cluster
-    cluster_counts = []
-    for cid in range(num_detected_clusters):
-        indices = np.where(particle_node_assignments == cid)[0]
-        count = len(indices)
-        cluster_counts.append(count)
-    # Compute the proportion of particles in each cluster
-    cluster_proportions = [count / N for count in cluster_counts]
-    # Build the cost matrix
-    cost_matrix = np.zeros((num_detected_clusters, num_groups))
-    for i in range(num_detected_clusters):
-        for j in range(num_groups):
-            cost_matrix[i][j] = abs(cluster_proportions[i] - group_proportions[j])
-    # Solve the assignment problem
-    row_ind, col_ind = scipy.optimize.linear_sum_assignment(cost_matrix)
-    total_cost = cost_matrix[row_ind, col_ind].sum()
-    # Compute reward
-    reward = (-1 * total_steps) - 100000 * total_cost
-    return reward, total_cost
-
-# Function to run the simulation with given action times and actions
-def run_simulation_with_actions(action_times, actions, render=render_bool):
-    global pos, vel, kx_field, ky_field, time_step, paused, running, key_press_data, cluster_id, particle_node_assignments
-    # Reset simulation state
-    initialize()
-    kx_field[0] = kx[0] = 1  # Start with kx = 1
-    time_step = 0
-    total_steps = 0
-    action_taken_flags = [False] * len(action_times)
-    action_times = [int(t) for t in action_times]  # Ensure action times are integers
-    max_action_time = max(action_times)
-    last_action_time = max_action_time
-    sim_running = True
-    while sim_running:
-        if not paused:
-            for _ in range(substepping):
-                compute_force()
-                update()
-                compute_energy()
-                calc_neighbors()
-                run_clustering(d)
-                update_average_neighbors()
-                update_neighbor_count_over_time()
-                calculate_weighted_avg_density()
-                cluster_aspect_ratios = calculate_aspect_ratios()
-
-            time_step += 1
-            total_steps += 1
-
-            # Apply actions if it's time and action hasn't been taken yet
-            for idx, action_time in enumerate(action_times):
-                if not action_taken_flags[idx] and time_step >= action_time:
-                    kx_field[0] = kx[0] = actions[idx]  # Change kx to the action value
-                    action_taken_flags[idx] = True
-                    if idx == len(action_times) - 1:
-                        last_action_time = time_step  # Record the time of last action
-
-            # If all actions have been taken, check if a certain number of steps have passed since last action
-            if all(action_taken_flags) and time_step >= last_action_time + wait_time:
-                # Compute reward
-                reward, total_cost = compute_reward(total_steps)
-                print(f"Actions taken at steps {action_times}: Reward = {reward}")
-                return reward, total_cost
-
-            # If total_steps exceeds some limit, stop simulation (prevent infinite loop)
-            if total_steps > 10000:
-                reward, total_cost = compute_reward(total_steps)
-                print(f"Simulation exceeded maximum steps. Reward = {reward}")
-                return reward, total_cost
-
-            # Render the simulation if required
-            if render:
-                render_simulation(cluster_aspect_ratios)
-                # Process events
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        sim_running = False
-                    elif event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_ESCAPE:
-                            sim_running = False
-                clock.tick(60)  # Limit to 60 FPS
-
-# Gradient descent optimization function
-def optimize_action():
-    # Input parameters are already defined: num_groups, group_proportions, actions, initial_guesses
-    best_reward = None
-    best_action_times = None
-
-    print("Evaluating initial guesses...")
-    for guess in initial_guesses:
-        # guess is a list of action times
-        action_times = guess
-        reward, total_cost = run_simulation_with_actions(action_times, actions, render=render_bool)
-        print(f"Action times {action_times}: Reward = {reward}, Total Cost = {total_cost:.4f}")
-        if best_reward is None or reward > best_reward:
-            best_reward = reward
-            best_action_times = action_times.copy()
-    
-    # Use the best initial guess for gradient descent
-    action_times = best_action_times.copy()
-    previous_reward = best_reward
-
-    print("\nStarting gradient descent optimization...")
-    while True:
-        improved = False
-        for i in range(len(action_times)):
-            current_time = action_times[i]
-            # Try moving backward
-            new_time_backward = max(1, current_time - learning_rate)
-            new_action_times = action_times.copy()
-            new_action_times[i] = new_time_backward
-            reward_backward, total_cost_backward = run_simulation_with_actions(new_action_times, actions, render=render_bool)
-            # Try moving forward
-            new_time_forward = current_time + learning_rate
-            new_action_times_forward = action_times.copy()
-            new_action_times_forward[i] = new_time_forward
-            reward_forward, total_cost_forward = run_simulation_with_actions(new_action_times_forward, actions, render=render_bool)
-            # Decide which direction to move
-            if reward_backward > previous_reward:
-                action_times[i] = new_time_backward
-                previous_reward = reward_backward
-                improved = True
-                print(f"Action time at index {i} updated to {new_time_backward} (earlier)")
-            elif reward_forward > previous_reward:
-                action_times[i] = new_time_forward
-                previous_reward = reward_forward
-                improved = True
-                print(f"Action time at index {i} updated to {new_time_forward} (later)")
-        if not improved:
-            # No further improvement
-            break
-
-    print("\nOptimal action times found.")
-    print(f"Final action times {action_times}: Reward = {previous_reward}")
-
-    # Run the simulation one more time with rendering
-    reward, total_cost = run_simulation_with_actions(action_times, actions, render=True)
-    print(f"Final total cost: {total_cost:.4f}")
-
-    # Output the key presses similar to 'write' mode
-    key_press_data.clear()
-    # Record key presses for 'x' and number corresponding to action at the action times
-    for action_time, action in zip(action_times, actions):
-        # Record 'x' key press
-        key_press_data.append((action_time, 'x'))
-        # Record number key press corresponding to 'action'
-        key_name = str(action)
-        key_press_data.append((action_time + 1, key_name))
-
-    # Save key_press_data to file
-    with open('key_press_data.txt', 'w') as f:
-        json.dump(key_press_data, f)
-    print("Optimized key press data saved to key_press_data.txt")
-    print(f"Optimal action times: {action_times}")
 
 # Function to render the simulation
 def render_simulation(cluster_aspect_ratios):
@@ -802,22 +622,267 @@ def render_simulation(cluster_aspect_ratios):
         # Write frame to video
         video_writer.write(frame)
 
+####################################################################################
+# ML code for 'simulation' mode begins here
+
+if mode == 'simulation':
+    def generate_initial_guesses(actions, initial_time=50, initial_step=10, time_gap=51):
+        initial_guesses = []
+        def helper(current_guess, idx):
+            if idx == len(actions):
+                initial_guesses.append(current_guess.copy())
+                return
+            if idx == 0:
+                # For the first action, i ranges from initial_time to 100, step initial_step
+                for i in range(initial_time, 100, initial_step):
+                    current_guess.append(i)
+                    helper(current_guess, idx+1)
+                    current_guess.pop()
+            else:
+                # For subsequent actions, ranges from previous value + 1 to previous value + time_gap
+                prev_value = current_guess[-1]
+                for i in range(prev_value + 1, prev_value + time_gap):
+                    current_guess.append(i)
+                    helper(current_guess, idx+1)
+                    current_guess.pop()
+        helper([], 0)
+        return initial_guesses
+
+    def optimize_action(num_groups_input, group_proportions_input, actions_input, wait_time_input, initial_guesses_input=None):
+        global num_groups, group_proportions, actions, wait_time, initial_guesses
+        num_groups = num_groups_input
+        group_proportions = group_proportions_input
+        actions = actions_input
+        wait_time = wait_time_input
+        if initial_guesses_input is None:
+            initial_guesses = generate_initial_guesses(actions)
+        else:
+            initial_guesses = initial_guesses_input
+
+        # Function to compute the reward based on the current particle positions
+        def compute_reward(total_steps):
+            # Run clustering to identify clusters
+            d_local = d  # Use same distance threshold
+            run_clustering(d_local)
+            # Get the number of clusters detected
+            num_detected_clusters = cluster_id
+            # Get counts of particles in each cluster
+            cluster_counts = []
+            for cid in range(num_detected_clusters):
+                indices = np.where(particle_node_assignments == cid)[0]
+                count = len(indices)
+                cluster_counts.append(count)
+            # Compute the proportion of particles in each cluster
+            cluster_proportions = [count / N for count in cluster_counts]
+            # Build the cost matrix
+            cost_matrix = np.zeros((num_detected_clusters, num_groups))
+            for i in range(num_detected_clusters):
+                for j in range(num_groups):
+                    cost_matrix[i][j] = abs(cluster_proportions[i] - group_proportions[j])
+            # Solve the assignment problem
+            row_ind, col_ind = scipy.optimize.linear_sum_assignment(cost_matrix)
+            total_cost = cost_matrix[row_ind, col_ind].sum()
+            # Compute reward
+            reward = (-1 * total_steps) - 100000 * total_cost
+            return reward, total_cost
+
+        # Function to run the simulation with given action times and actions
+        def run_simulation_with_actions(action_times, actions, render=render_bool):
+            global pos, vel, kx_field, ky_field, time_step, paused, running, key_press_data, cluster_id, particle_node_assignments
+            # Reset simulation state
+            initialize()
+            kx_field[0] = kx[0] = 1  # Start with kx = 1
+            time_step = 0
+            total_steps = 0
+            action_taken_flags = [False] * len(action_times)
+            action_times = [int(t) for t in action_times]  # Ensure action times are integers
+            max_action_time = max(action_times)
+            last_action_time = max_action_time
+            sim_running = True
+            while sim_running:
+                if not paused:
+                    for _ in range(substepping):
+                        compute_force()
+                        update()
+                        compute_energy()
+                        calc_neighbors()
+                        run_clustering(d)
+                        update_average_neighbors()
+                        update_neighbor_count_over_time()
+                        calculate_weighted_avg_density()
+                        cluster_aspect_ratios = calculate_aspect_ratios()
+
+                    time_step += 1
+                    total_steps += 1
+
+                    # Apply actions if it's time and action hasn't been taken yet
+                    for idx, action_time in enumerate(action_times):
+                        if not action_taken_flags[idx] and time_step >= action_time:
+                            kx_field[0] = kx[0] = actions[idx]  # Change kx to the action value
+                            action_taken_flags[idx] = True
+                            if idx == len(action_times) - 1:
+                                last_action_time = time_step  # Record the time of last action
+
+                    # If all actions have been taken, check if a certain number of steps have passed since last action
+                    if all(action_taken_flags) and time_step >= last_action_time + wait_time:
+                        # Compute reward
+                        reward, total_cost = compute_reward(total_steps)
+                        print(f"Actions taken at steps {action_times}: Reward = {reward}")
+                        return reward, total_cost
+
+                    # If total_steps exceeds some limit, stop simulation (prevent infinite loop)
+                    if total_steps > 10000:
+                        reward, total_cost = compute_reward(total_steps)
+                        print(f"Simulation exceeded maximum steps. Reward = {reward}")
+                        return reward, total_cost
+
+                    # Render the simulation if required
+                    if render:
+                        render_simulation(cluster_aspect_ratios)
+                        # Process events
+                        for event in pygame.event.get():
+                            if event.type == pygame.QUIT:
+                                sim_running = False
+                            elif event.type == pygame.KEYDOWN:
+                                if event.key == pygame.K_ESCAPE:
+                                    sim_running = False
+                        clock.tick(60)  # Limit to 60 FPS
+
+        # Gradient descent optimization function
+        best_reward = None
+        best_action_times = None
+
+        print("Evaluating initial guesses...")
+        for guess in initial_guesses:
+            # guess is a list of action times
+            action_times = guess
+            reward, total_cost = run_simulation_with_actions(action_times, actions, render=render_bool)
+            print(f"Action times {action_times}: Reward = {reward}, Total Cost = {total_cost:.4f}")
+            if best_reward is None or reward > best_reward:
+                best_reward = reward
+                best_action_times = action_times.copy()
+
+        # Use the best initial guess for gradient descent
+        action_times = best_action_times.copy()
+        previous_reward = best_reward
+
+        print("\nStarting gradient descent optimization...")
+        while True:
+            improved = False
+            for i in range(len(action_times)):
+                current_time = action_times[i]
+                # Try moving backward
+                new_time_backward = max(1, current_time - learning_rate)
+                new_action_times = action_times.copy()
+                new_action_times[i] = new_time_backward
+                reward_backward, total_cost_backward = run_simulation_with_actions(new_action_times, actions, render=render_bool)
+                # Try moving forward
+                new_time_forward = current_time + learning_rate
+                new_action_times_forward = action_times.copy()
+                new_action_times_forward[i] = new_time_forward
+                reward_forward, total_cost_forward = run_simulation_with_actions(new_action_times_forward, actions, render=render_bool)
+                # Decide which direction to move
+                if reward_backward > previous_reward:
+                    action_times[i] = new_time_backward
+                    previous_reward = reward_backward
+                    improved = True
+                    print(f"Action time at index {i} updated to {new_time_backward} (earlier)")
+                elif reward_forward > previous_reward:
+                    action_times[i] = new_time_forward
+                    previous_reward = reward_forward
+                    improved = True
+                    print(f"Action time at index {i} updated to {new_time_forward} (later)")
+            if not improved:
+                # No further improvement
+                break
+
+        print("\nOptimal action times found.")
+        print(f"Final action times {action_times}: Reward = {previous_reward}")
+
+        # Run the simulation one more time with rendering
+        reward, total_cost = run_simulation_with_actions(action_times, actions, render=True)
+        print(f"Final total cost: {total_cost:.4f}")
+
+        # Output the key presses similar to 'write' mode
+        key_press_data.clear()
+        # Record key presses for 'x' and number corresponding to action at the action times
+        for action_time, action in zip(action_times, actions):
+            # Record 'x' key press
+            key_press_data.append((action_time, 'x'))
+            # Record number key press corresponding to 'action'
+            key_name = str(action)
+            key_press_data.append((action_time + 1, key_name))
+
+        # Save key_press_data to file
+        with open('key_press_data.txt', 'w') as f:
+            json.dump(key_press_data, f)
+        print("Optimized key press data saved to key_press_data.txt")
+        print(f"Optimal action times: {action_times}")
+
+    # Call the optimize_action function with desired parameters
+    num_groups = 3  # Number of clusters to split the particles into
+    group_proportions = [1/3, 1/3, 1/3]  # Desired proportions for each group, must sum to 1
+    actions = [2, 3]  # Actions: changes to the number of nodes in x-direction
+    wait_time = 50
+
+    optimize_action(num_groups, group_proportions, actions, wait_time)
+
+# Plotting functions
+def plot_average_neighbors_over_time():
+    plt.figure(figsize=(10, 6))
+    plt.plot(average_neighbors_over_time)
+    plt.title('Average Neighbors Over Time')
+    plt.xlabel('Simulation Step')
+    plt.ylabel('Average Neighbors')
+    # Plot vertical lines at key press indices adjusted for substepping
+    if key_press_data_indices:
+        for idx in key_press_data_indices:
+            plt.axvline(x=idx * substepping, color='red', linestyle='--')
+    plt.show()
+
+def plot_neighbor_distribution_over_time():
+    plt.figure(figsize=(10, 6))
+    for i in range(7):
+        plt.plot(neighbor_count_over_time[i], label=f'{i} neighbors')
+    plt.title('Neighbor Distribution Over Time')
+    plt.xlabel('Simulation Step')
+    plt.ylabel('Count')
+    plt.legend()
+    # Plot vertical lines at key press indices adjusted for substepping
+    if key_press_data_indices:
+        for idx in key_press_data_indices:
+            plt.axvline(x=idx * substepping, color='red', linestyle='--')
+    plt.show()
+
+def plot_weighted_avg_density_over_time():
+    plt.figure(figsize=(10, 6))
+    plt.plot(weighted_avg_density_over_time)
+    plt.title('Weighted Average Cluster Density Over Time')
+    plt.xlabel('Simulation Step')
+    plt.ylabel('Weighted Avg Density')
+    # Plot vertical lines at key press indices adjusted for substepping
+    if key_press_data_indices:
+        for idx in key_press_data_indices:
+            plt.axvline(x=idx * substepping, color='red', linestyle='--')
+    plt.show()
+
+def plot_weighted_avg_aspect_ratio_over_time():
+    plt.figure(figsize=(10, 6))
+    plt.plot(weighted_avg_aspect_ratio_over_time)
+    plt.title('Weighted Average Aspect Ratio Over Time')
+    plt.xlabel('Simulation Step')
+    plt.ylabel('Weighted Avg Aspect Ratio')
+    # Plot vertical lines at key press indices adjusted for substepping
+    if key_press_data_indices:
+        for idx in key_press_data_indices:
+            plt.axvline(x=idx * substepping, color='red', linestyle='--')
+    plt.show()
+
 # End of ML code
 ####################################################################################
 
 # Main simulation loop
-if mode == 'simulation':
-    # In 'simulation' mode, run the optimization
-    optimize_action()
-    # After optimization, we can exit the program
-    # Release the video writer
-    if video_writer is not None:
-        video_writer.release()
-        video_writer = None
-        print(f"Video saved as {video_filename}")
-    pygame.quit()
-    sys.exit()
-else:
+if mode != 'simulation':
     running = True
     while running:
         if mode == 'write':
