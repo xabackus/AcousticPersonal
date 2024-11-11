@@ -1,3 +1,9 @@
+# scp /Users/xanderbackus/Acoustic_UROP/PyGame_Acoustics_2D_cluster_manipulation.py xabackus@f12.csail.mit.edu:~/
+# ssh xabackus@f12.csail.mit.edu
+# python3 PyGame_Acoustics_2D_cluster_manipulation.py
+# If you want the script to continue running after you disconnect, use nohup:
+# nohup python3 PyGame_Acoustics_2D_cluster_manipulation.py &
+
 import numpy as np
 import pygame
 import sys
@@ -6,14 +12,16 @@ import matplotlib.pyplot as plt
 import cv2  # For video writing
 import json  # For saving/loading key press data
 import os   # For file path operations
+import scipy.optimize  # For linear sum assignment
 
 # Set the mode: 'write', 'read', or 'simulation'
 # Uncomment the desired mode
 # mode = 'write'       # Record key presses
 # mode = 'read'        # Replay simulation based on recorded key presses
 mode = 'simulation'    # ML-based control to optimize action timing
+learning_rate = 1
 
-render_bool = True     # Boolean variable; controls whether simulation renders while running gradient descent
+render_bool = False     # Boolean variable; controls whether simulation renders while running gradient descent
 
 # Constants and Initialization
 PI = 3.1415926
@@ -371,103 +379,6 @@ def calculate_aspect_ratios():
     weighted_avg_aspect_ratio_over_time.append(weighted_avg_aspect_ratio)
     return cluster_aspect_ratios
 
-# Plotting functions using Matplotlib
-def plot_average_neighbors_over_time():
-    plt.figure(figsize=(10, 6))
-    plt.plot(average_neighbors_over_time, label="Average Neighbors Over Time", color="blue", linewidth=2)
-
-    # Add vertical lines at key_press_data_indices
-    for idx, data_index in enumerate(key_press_data_indices):
-        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-
-    plt.xlabel("Data Index")
-    plt.ylabel("Average Number of Neighbors")
-    plt.title("Average Neighbors Over Time")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-
-    # Save the figure
-    filename = f"average_neighbors_over_time_{mode}.png"
-    plt.savefig(filename)
-    print(f"Plot saved as {filename}")
-    plt.close()
-
-def plot_neighbor_distribution_over_time():
-    plt.figure(figsize=(10, 6))
-
-    # Number of neighbor categories
-    max_neighbors = 6
-
-    # Convert the neighbor_count_over_time to a numpy array for easier manipulation
-    neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(7)])
-
-    # Compute cumulative counts along the time axis (axis=0)
-    cumulative_counts = np.cumsum(neighbor_counts_array, axis=0)
-
-    # Plot each cumulative count
-    for i in range(max_neighbors + 1):
-        plt.plot(cumulative_counts[i], label=f"Up to {i} neighbors", linewidth=2)
-
-    # Add vertical lines at key_press_data_indices
-    for idx, data_index in enumerate(key_press_data_indices):
-        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-
-    plt.xlabel("Data Index")
-    plt.ylabel("Number of Particles")
-    plt.title("Cumulative Neighbor Distribution Over Time")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-
-    # Save the figure
-    filename = f"neighbor_distribution_over_time_{mode}.png"
-    plt.savefig(filename)
-    print(f"Plot saved as {filename}")
-    plt.close()
-
-def plot_weighted_avg_density_over_time():
-    plt.figure(figsize=(10, 6))
-    plt.plot(weighted_avg_density_over_time, label="Weighted Avg Cluster Density Over Time", color="purple", linewidth=2)
-
-    # Add vertical lines at key_press_data_indices
-    for idx, data_index in enumerate(key_press_data_indices):
-        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-
-    plt.xlabel("Data Index")
-    plt.ylabel("Weighted Average Cluster Density")
-    plt.title("Weighted Average Cluster Density Over Time")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-
-    # Save the figure
-    filename = f"weighted_avg_density_over_time_{mode}.png"
-    plt.savefig(filename)
-    print(f"Plot saved as {filename}")
-    plt.close()
-
-def plot_weighted_avg_aspect_ratio_over_time():
-    plt.figure(figsize=(10, 6))
-    plt.plot(weighted_avg_aspect_ratio_over_time, label="Weighted Avg Aspect Ratio Over Time", color="orange", linewidth=2)
-
-    # Add vertical lines at key_press_data_indices
-    for idx, data_index in enumerate(key_press_data_indices):
-        plt.axvline(x=data_index, color='red', linestyle='--', linewidth=1, label='Key Press' if idx == 0 else "")
-
-    plt.xlabel("Data Index")
-    plt.ylabel("Weighted Average Aspect Ratio")
-    plt.title("Weighted Average Aspect Ratio Over Time")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-
-    # Save the figure
-    filename = f"weighted_avg_aspect_ratio_over_time_{mode}.png"
-    plt.savefig(filename)
-    print(f"Plot saved as {filename}")
-    plt.close()
-
 # Initialize the simulation
 initialize()
 xchanging = True  # Flag to indicate whether changing kx or ky
@@ -573,31 +484,67 @@ def process_key_press(key):
 ####################################################################################
 # ML code for 'simulation' mode begins here
 
+if mode == 'simulation':
+    # Input parameters
+    num_groups = 3  # Number of clusters to split the particles into
+    group_proportions = [1/3, 1/3, 1/3]  # Desired proportions for each group, must sum to 1
+    actions = [2, 3]  # Actions: changes to the number of nodes in x-direction
+    wait_time = 50
+    '''
+    initial_guesses = [
+        [50, 100],  # First guess: change to 2 at t=50, change to 3 at t=100
+        [100, 200],
+        [150, 300],
+        [200, 400],
+        [250, 500],
+        [300, 600],
+    ]
+    '''
+    initial_guesses = []
+    for i in range(50,100,10):
+        for j in range(i+1,i + 51):
+            initial_guesses.append([i,j])
+    
+
 # Function to compute the reward based on the current particle positions
 def compute_reward(total_steps):
     # Run clustering to identify clusters
     d_local = d  # Use same distance threshold
     run_clustering(d_local)
-    # Define groups based on x-coordinate
-    group1 = pos[:, 0] < 0.5
-    group2 = pos[:, 0] >= 0.5
-    fraction_group1 = np.sum(group1) / N
-    fraction_group2 = np.sum(group2) / N
-    reward = (-10000 * abs(fraction_group1 - fraction_group2)) - total_steps
-    return reward, fraction_group1, fraction_group2
+    # Get the number of clusters detected
+    num_detected_clusters = cluster_id
+    # Get counts of particles in each cluster
+    cluster_counts = []
+    for cid in range(num_detected_clusters):
+        indices = np.where(particle_node_assignments == cid)[0]
+        count = len(indices)
+        cluster_counts.append(count)
+    # Compute the proportion of particles in each cluster
+    cluster_proportions = [count / N for count in cluster_counts]
+    # Build the cost matrix
+    cost_matrix = np.zeros((num_detected_clusters, num_groups))
+    for i in range(num_detected_clusters):
+        for j in range(num_groups):
+            cost_matrix[i][j] = abs(cluster_proportions[i] - group_proportions[j])
+    # Solve the assignment problem
+    row_ind, col_ind = scipy.optimize.linear_sum_assignment(cost_matrix)
+    total_cost = cost_matrix[row_ind, col_ind].sum()
+    # Compute reward
+    reward = (-1 * total_steps) - 100000 * total_cost
+    return reward, total_cost
 
-# Function to run the simulation with a given action time step and return the reward
-def run_simulation_with_action(action_time_step, render=render_bool):
+# Function to run the simulation with given action times and actions
+def run_simulation_with_actions(action_times, actions, render=render_bool):
     global pos, vel, kx_field, ky_field, time_step, paused, running, key_press_data, cluster_id, particle_node_assignments
     # Reset simulation state
     initialize()
     kx_field[0] = kx[0] = 1  # Start with kx = 1
     time_step = 0
     total_steps = 0
-    action_taken = False
-    cluster_id = 0
-    particle_node_assignments[:] = -1  # Reset cluster assignments
-
+    action_taken_flags = [False] * len(action_times)
+    action_times = [int(t) for t in action_times]  # Ensure action times are integers
+    max_action_time = max(action_times)
+    last_action_time = max_action_time
     sim_running = True
     while sim_running:
         if not paused:
@@ -615,18 +562,26 @@ def run_simulation_with_action(action_time_step, render=render_bool):
             time_step += 1
             total_steps += 1
 
-            # Apply action if it's time and action hasn't been taken yet
-            if not action_taken and time_step >= action_time_step:
-                kx_field[0] = kx[0] = 2  # Change kx to 2
-                action_taken = True
-                action_taken_time = time_step
+            # Apply actions if it's time and action hasn't been taken yet
+            for idx, action_time in enumerate(action_times):
+                if not action_taken_flags[idx] and time_step >= action_time:
+                    kx_field[0] = kx[0] = actions[idx]  # Change kx to the action value
+                    action_taken_flags[idx] = True
+                    if idx == len(action_times) - 1:
+                        last_action_time = time_step  # Record the time of last action
 
-            # If action has been taken, check if 200 steps have passed since then
-            if action_taken and time_step >= action_taken_time + 200:
+            # If all actions have been taken, check if a certain number of steps have passed since last action
+            if all(action_taken_flags) and time_step >= last_action_time + wait_time:
                 # Compute reward
-                reward, fraction_group1, fraction_group2 = compute_reward(total_steps)
-                print(f"Action taken at step {action_time_step}: Reward = {reward}")
-                return reward, action_time_step, fraction_group1, fraction_group2
+                reward, total_cost = compute_reward(total_steps)
+                print(f"Actions taken at steps {action_times}: Reward = {reward}")
+                return reward, total_cost
+
+            # If total_steps exceeds some limit, stop simulation (prevent infinite loop)
+            if total_steps > 10000:
+                reward, total_cost = compute_reward(total_steps)
+                print(f"Simulation exceeded maximum steps. Reward = {reward}")
+                return reward, total_cost
 
             # Render the simulation if required
             if render:
@@ -642,69 +597,76 @@ def run_simulation_with_action(action_time_step, render=render_bool):
 
 # Gradient descent optimization function
 def optimize_action():
-    # Initial guesses for action time steps
-    initial_guesses = [50, 100, 200, 300, 400, 500, 700, 1000]
+    # Input parameters are already defined: num_groups, group_proportions, actions, initial_guesses
     best_reward = None
-    best_action_time_step = None
+    best_action_times = None
 
     print("Evaluating initial guesses...")
     for guess in initial_guesses:
-        reward, action_time_step, fraction_group1, fraction_group2 = run_simulation_with_action(guess, render=render_bool)
-        print(f"Action at step {action_time_step}: Reward = {reward}, Group1 fraction = {fraction_group1:.2f}, Group2 fraction = {fraction_group2:.2f}")
+        # guess is a list of action times
+        action_times = guess
+        reward, total_cost = run_simulation_with_actions(action_times, actions, render=render_bool)
+        print(f"Action times {action_times}: Reward = {reward}, Total Cost = {total_cost:.4f}")
         if best_reward is None or reward > best_reward:
             best_reward = reward
-            best_action_time_step = action_time_step
-
+            best_action_times = action_times.copy()
+    
     # Use the best initial guess for gradient descent
-    action_time_step = best_action_time_step
-    learning_rate = 10  # Adjust the time step by this amount
+    action_times = best_action_times.copy()
     previous_reward = best_reward
 
     print("\nStarting gradient descent optimization...")
     while True:
-        # Try action earlier
-        earlier_action_time_step = max(1, action_time_step - learning_rate)
-        reward_earlier, _, _, _ = run_simulation_with_action(earlier_action_time_step, render=render_bool)
-        # Try action later
-        later_action_time_step = action_time_step + learning_rate
-        reward_later, _, _, _ = run_simulation_with_action(later_action_time_step, render=render_bool)
-
-        # Print the rewards
-        print(f"Trying action at step {earlier_action_time_step}: Reward = {reward_earlier}")
-        print(f"Trying action at step {later_action_time_step}: Reward = {reward_later}")
-
-        # Check if moving earlier improves the reward
-        if reward_earlier > previous_reward:
-            action_time_step = earlier_action_time_step
-            previous_reward = reward_earlier
-            print(f"Action time updated to {action_time_step} (earlier)")
-            continue
-        # Check if moving later improves the reward
-        elif reward_later > previous_reward:
-            action_time_step = later_action_time_step
-            previous_reward = reward_later
-            print(f"Action time updated to {action_time_step} (later)")
-            continue
-        else:
-            # Neither earlier nor later improves the reward; optimal time found
-            print("\nOptimal action time found.")
-            print(f"Final action at step {action_time_step}: Reward = {previous_reward}")
-            # Run the simulation one more time with rendering
-            reward, _, fraction_group1, fraction_group2 = run_simulation_with_action(action_time_step, render=True)
-            print(f"Final fractions: Group1 = {fraction_group1:.2f}, Group2 = {fraction_group2:.2f}")
+        improved = False
+        for i in range(len(action_times)):
+            current_time = action_times[i]
+            # Try moving backward
+            new_time_backward = max(1, current_time - learning_rate)
+            new_action_times = action_times.copy()
+            new_action_times[i] = new_time_backward
+            reward_backward, total_cost_backward = run_simulation_with_actions(new_action_times, actions, render=render_bool)
+            # Try moving forward
+            new_time_forward = current_time + learning_rate
+            new_action_times_forward = action_times.copy()
+            new_action_times_forward[i] = new_time_forward
+            reward_forward, total_cost_forward = run_simulation_with_actions(new_action_times_forward, actions, render=render_bool)
+            # Decide which direction to move
+            if reward_backward > previous_reward:
+                action_times[i] = new_time_backward
+                previous_reward = reward_backward
+                improved = True
+                print(f"Action time at index {i} updated to {new_time_backward} (earlier)")
+            elif reward_forward > previous_reward:
+                action_times[i] = new_time_forward
+                previous_reward = reward_forward
+                improved = True
+                print(f"Action time at index {i} updated to {new_time_forward} (later)")
+        if not improved:
+            # No further improvement
             break
+
+    print("\nOptimal action times found.")
+    print(f"Final action times {action_times}: Reward = {previous_reward}")
+
+    # Run the simulation one more time with rendering
+    reward, total_cost = run_simulation_with_actions(action_times, actions, render=True)
+    print(f"Final total cost: {total_cost:.4f}")
 
     # Output the key presses similar to 'write' mode
     key_press_data.clear()
-    # Record key presses for 'x' and number '2' at the action time step
-    key_press_data.append((action_time_step, 'x'))
-    key_press_data.append((action_time_step + 1, '2'))
+    # Record key presses for 'x' and number corresponding to action at the action times
+    for action_time, action in zip(action_times, actions):
+        # Record 'x' key press
+        key_press_data.append((action_time, 'x'))
+        # Record number key press corresponding to 'action'
+        key_name = str(action)
+        key_press_data.append((action_time + 1, key_name))
 
     # Save key_press_data to file
     with open('key_press_data.txt', 'w') as f:
         json.dump(key_press_data, f)
     print("Optimized key press data saved to key_press_data.txt")
-    print(f"Optimal action time step: {action_time_step}")
+    print(f"Optimal action times: {action_times}")
 
 # Function to render the simulation
 def render_simulation(cluster_aspect_ratios):
@@ -826,99 +788,6 @@ def render_simulation(cluster_aspect_ratios):
         aspect_ratio_surface = font.render(f"Weighted Avg Aspect Ratio: {weighted_avg_aspect_ratio:.2f}", True, (255, 255, 255))
         window.blit(aspect_ratio_surface, (start_x, y_pos))
         y_pos += spacing
-
-    # Draw Average Neighbors Over Time Graph
-    pygame.draw.rect(window, (30, 30, 30), average_graph_rect)  # Background for graph area
-    data = average_neighbors_over_time
-    data_length = len(data)
-    max_data_points = average_graph_rect.width  # Number of pixels in x-direction
-
-    if data_length > max_data_points:
-        data_to_plot = data[-max_data_points:]
-    else:
-        data_to_plot = data
-
-    x_scale = average_graph_rect.width / max_data_points
-    y_min = 0
-    y_max = 6
-    y_range = y_max - y_min
-    y_scale = (average_graph_rect.height - 40) / y_range  # Leave space for labels
-
-    points = []
-
-    for i, value in enumerate(data_to_plot):
-        x = average_graph_rect.left + i * x_scale
-        y = average_graph_rect.bottom - 20 - (value - y_min) * y_scale
-        points.append((x, y))
-
-    if len(points) >= 2:
-        pygame.draw.lines(window, (0, 255, 0), False, points, 2)  # Green line
-
-    # Draw labels and axes for average neighbors graph
-    text_surface = font.render("Average Neighbors Over Time", True, (255, 255, 255))
-    window.blit(text_surface, (average_graph_rect.left + 10, average_graph_rect.top + 10))
-
-    # Draw y-axis labels
-    for i in range(int(y_min), int(y_max) + 1):
-        y = average_graph_rect.bottom - 20 - (i - y_min) * y_scale
-        label_surface = font.render(str(i), True, (255, 255, 255))
-        window.blit(label_surface, (average_graph_rect.left + 5, y - 8))
-        pygame.draw.line(window, (100, 100, 100), (average_graph_rect.left + 30, y), (average_graph_rect.right, y), 1)
-
-    # Draw Cumulative Neighbor Proportions Graph
-    pygame.draw.rect(window, (30, 30, 30), cumulative_graph_rect)  # Background for graph area
-    neighbor_counts_array = np.array([neighbor_count_over_time[i] for i in range(7)])
-    data_length = neighbor_counts_array.shape[1]
-
-    max_data_points = cumulative_graph_rect.width  # Number of pixels in x-direction
-
-    if data_length > max_data_points:
-        neighbor_counts_array = neighbor_counts_array[:, -max_data_points:]
-        data_length = max_data_points
-
-    cumulative_counts_array = np.cumsum(neighbor_counts_array, axis=0)
-    cumulative_proportions_array = cumulative_counts_array / N  # Convert to proportions
-
-    x_scale = cumulative_graph_rect.width / max_data_points
-    y_scale = (cumulative_graph_rect.height - 40)  # Leave space for labels
-
-    # Draw cumulative proportions for each neighbor count
-    for neighbor in range(6, -1, -1):  # Draw from 6 to 0 neighbors
-        data = cumulative_proportions_array[neighbor]
-        points = []
-        for i, value in enumerate(data):
-            x = cumulative_graph_rect.left + i * x_scale
-            y = cumulative_graph_rect.bottom - 20 - value * y_scale
-            points.append((x, y))
-        if len(points) >= 2:
-            pygame.draw.lines(window, neighbor_colors[neighbor], False, points, 2)
-
-    # Draw labels and axes for cumulative graph
-    text_surface = font.render("Cumulative Neighbor Proportions Over Time", True, (255, 255, 255))
-    window.blit(text_surface, (cumulative_graph_rect.left + 10, cumulative_graph_rect.top + 10))
-
-    # Draw legend for cumulative graph
-    legend_y = cumulative_graph_rect.top + 30
-    legend_x = cumulative_graph_rect.left + 10
-    for neighbor in range(7):
-        color = neighbor_colors[neighbor]
-        label = neighbor_labels[neighbor]
-        pygame.draw.line(window, color, (legend_x, legend_y), (legend_x + 20, legend_y), 2)
-        label_surface = font.render(f"Neighbors = {label}", True, (255, 255, 255))
-        window.blit(label_surface, (legend_x + 25, legend_y - 8))
-        legend_y += 20
-
-    # Draw numbering labels to clusters on the simulation area
-    pos_np = pos.copy()
-    for cluster_idx in range(cluster_id):
-        indices = np.where(assignments == cluster_idx)[0]
-        if len(indices) > 0:
-            cluster_positions = pos_np[indices]
-            centroid = np.mean(cluster_positions, axis=0)
-            centroid = np.clip(centroid, 0.05, 0.95)
-            text_surface = font.render(str(cluster_idx + 1), True, (255, 255, 255))
-            screen_pos = (int(centroid[0] * res), int(centroid[1] * res))
-            window.blit(text_surface, screen_pos)
 
     pygame.display.flip()
 
