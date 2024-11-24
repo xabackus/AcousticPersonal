@@ -1,306 +1,115 @@
 import numpy as np
 import pygame
 import sys
-import math
 
-# Constants
+# Constants and Initialization
 PI = np.pi
+res = 512  # Simulation area size (512x512 pixels)
+dashboard_width = 400  # Width for the dashboard area
 
-# Initial Simulation Parameters
-initial_kx = 1
-initial_ky = 1
+# Define dashboard heights
+text_dashboard_height = 300  # Height for displaying text information
+average_graph_height = 200   # Height for the average neighbors graph
+cumulative_graph_height = 200  # Height for the cumulative neighbor proportions graph
 
-# Grid Resolution
-BASE_RES_X = 512
-BASE_RES_Y = 512
-DASHBOARD_WIDTH = 400
+# Calculate window dimensions
+window_width = res + dashboard_width
+window_height = max(res, text_dashboard_height + average_graph_height + cumulative_graph_height)
 
-# Window Dimensions
-RES_X = BASE_RES_X * initial_kx
-RES_Y = BASE_RES_Y * initial_ky
-WINDOW_WIDTH = RES_X + DASHBOARD_WIDTH
-WINDOW_HEIGHT = RES_Y
-
-# Acoustic Properties
-c = 343.0  # Speed of sound in air (m/s)
-gamma = 0.7  # Damping coefficient
-rho0 = 1.21  # Ambient density of air (kg/m^3)
-
-# Simulation Parameters
-dx = 1.0 / RES_X  # Spatial step (assuming unit length)
-dy = 1.0 / RES_Y
-dt = 0.5 * dx / c  # Time step (CFL condition)
-num_steps = 0
-
-# Initialize Pressure Fields
-p_prev = np.zeros((RES_X, RES_Y), dtype=np.float32)
-p_curr = np.zeros((RES_X, RES_Y), dtype=np.float32)
-p_next = np.zeros((RES_X, RES_Y), dtype=np.float32)
-
-# Initialize Pygame
+# Pygame Initialization
 pygame.init()
-window = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+window = pygame.display.set_mode((window_width, window_height))
 pygame.display.set_caption("Bulk Acoustic 2D Continuum Simulation with Dashboards")
 clock = pygame.time.Clock()
 
-# Font for Dashboard
-pygame.font.init()
-font = pygame.font.SysFont('Arial', 16)
-
-# Dashboard Areas
-text_dashboard_height = 300  # Height for displaying text information
-average_graph_height = 200   # Height for the average pressure graph
-cumulative_graph_height = 200  # Height for the cumulative pressure distribution graph
-
-text_area_rect = pygame.Rect(RES_X, 0, DASHBOARD_WIDTH, text_dashboard_height)
-average_graph_rect = pygame.Rect(RES_X, text_dashboard_height, DASHBOARD_WIDTH, average_graph_height)
-cumulative_graph_rect = pygame.Rect(RES_X, text_dashboard_height + average_graph_height, DASHBOARD_WIDTH, cumulative_graph_height)
-
-# Colors
-background_color = (17, 47, 65)  # Dark background
-dashboard_bg_color = (30, 30, 30)
-
-# Simulation Control Flags
+# Simulation Parameters
 paused = False
 running = True  # Flag to control the main loop
 
-# Grid Parameters (kx and ky determine the number of pressure wave nodes)
-kx_field = [initial_kx]
-ky_field = [initial_ky]
-message = "Changing number of nodes along X-axis"
-xchanging = True  # Flag to indicate whether changing kx or ky
+# Grid Parameters
+grid_size = 128  # Number of grid cells along one axis
+dx = 1.0 / grid_size  # Spatial resolution
+dt = 1e-4  # Time step
 
-# Tracking Simulation Metrics
-average_pressure_over_time = []
-total_energy_over_time = []
-key_press_data = []  # List of tuples: (time_step, key_name)
+# Initialize fields
+rho = np.ones((grid_size, grid_size), dtype=np.float32)  # Density field
+vx = np.zeros((grid_size, grid_size), dtype=np.float32)  # Velocity field in x
+vy = np.zeros((grid_size, grid_size), dtype=np.float32)  # Velocity field in y
+
+# Acoustic properties
+po = 1e1  # Acoustic pressure (Increased for better visualization)
+ax = np.array([1.0])  # Amplitude in x-direction
+ay = np.array([1.0])  # Amplitude in y-direction
+kx = np.array([1], dtype=int)  # Wave number in x-direction
+ky = np.array([1], dtype=int)  # Wave number in y-direction
+
+# Drag properties
+gamma = 1e4  # Drag coefficient (Reduced for better visualization)
+
+# For tracking simulation metrics
+average_speed_over_time = []  # Track average speed over time
 time_step = 0  # Tracks the current time step
 
-# Function to adjust grid resolution
-def adjust_grid(kx, ky):
-    global RES_X, RES_Y, dx, dy, p_prev, p_curr, p_next, window, WINDOW_WIDTH, WINDOW_HEIGHT
-    RES_X = BASE_RES_X * kx
-    RES_Y = BASE_RES_Y * ky
-    dx = 1.0 / RES_X
-    dy = 1.0 / RES_Y
-    # Reinitialize pressure fields
-    p_prev = np.zeros((RES_X, RES_Y), dtype=np.float32)
-    p_curr = np.zeros((RES_X, RES_Y), dtype=np.float32)
-    p_next = np.zeros((RES_X, RES_Y), dtype=np.float32)
-    # Update window size
-    WINDOW_WIDTH = RES_X + DASHBOARD_WIDTH
-    WINDOW_HEIGHT = RES_Y
-    window = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    # Update dashboard rectangles
-    update_dashboard_rects()
+# Font for text
+pygame.font.init()
+font = pygame.font.SysFont('Arial', 16)
 
-def update_dashboard_rects():
-    global text_area_rect, average_graph_rect, cumulative_graph_rect
-    text_area_rect.update(RES_X, 0, DASHBOARD_WIDTH, text_dashboard_height)
-    average_graph_rect.update(RES_X, text_dashboard_height, DASHBOARD_WIDTH, average_graph_height)
-    cumulative_graph_rect.update(RES_X, text_dashboard_height + average_graph_height, DASHBOARD_WIDTH, cumulative_graph_height)
+# Define dashboard areas
+text_area_rect = pygame.Rect(res, 0, dashboard_width, text_dashboard_height)
+average_graph_rect = pygame.Rect(res, text_dashboard_height, dashboard_width, average_graph_height)
+cumulative_graph_rect = pygame.Rect(res, text_dashboard_height + average_graph_height, dashboard_width, cumulative_graph_height)
 
-# Function to add a pressure source
-def add_source(p, x, y, amplitude):
-    if 0 <= x < RES_X and 0 <= y < RES_Y:
-        p[x, y] += amplitude
+# Initialize key press tracking variables
+key_press_data = []  # List of tuples: (time_step, key_name)
+xchanging = True  # Flag to indicate whether changing kx or ky
+message = "Changing number of nodes along X-axis"
 
-# Function to update the pressure field
-def update_pressure(p_prev, p_curr, p_next):
-    # Compute Laplacian using finite differences
-    laplacian = (
-        np.roll(p_curr, 1, axis=0) +
-        np.roll(p_curr, -1, axis=0) +
-        np.roll(p_curr, 1, axis=1) +
-        np.roll(p_curr, -1, axis=1) -
-        4 * p_curr
-    ) / (dx * dy)
+# Initialize acoustic force fields
+def compute_acoustic_force():
+    x = np.linspace(0, 1, grid_size, endpoint=False)
+    y = np.linspace(0, 1, grid_size, endpoint=False)
+    X, Y = np.meshgrid(x, y, indexing='xy')  # Use 'xy' indexing for correct orientation
 
-    # Update pressure using the wave equation
-    p_next = (2 * p_curr - p_prev + (c ** 2) * (dt ** 2) * laplacian) / (1 + gamma * dt)
+    f_acoustic_x = np.zeros_like(X)
+    f_acoustic_y = np.zeros_like(Y)
 
-    # Apply boundary conditions (e.g., zero pressure at boundaries)
-    p_next[0, :] = 0
-    p_next[-1, :] = 0
-    p_next[:, 0] = 0
-    p_next[:, -1] = 0
+    for wave in range(len(kx)):
+        f_acoustic_x += ax[wave] * np.sin(2 * PI * kx[wave] * X)
+    for wave in range(len(ky)):
+        f_acoustic_y += ay[wave] * np.sin(2 * PI * ky[wave] * Y)
 
-    return p_next
+    f_acoustic_x *= po
+    f_acoustic_y *= po
 
-# Function to compute average pressure
-def compute_average_pressure(p):
-    return np.mean(p)
+    return f_acoustic_x, f_acoustic_y
 
-# Function to compute total energy (kinetic + potential)
-def compute_total_energy(p_prev, p_curr, p_next):
-    # Kinetic Energy Approximation
-    kinetic = 0.5 * rho0 * ((p_curr - p_prev) / dt) ** 2
-    # Potential Energy Approximation
-    potential = 0.5 * (p_curr ** 2) / (rho0 * c ** 2)
-    total_energy = np.sum(kinetic + potential)
-    return total_energy
+# Initialize the simulation
+def initialize():
+    global rho, vx, vy
+    rho.fill(1.0)  # Uniform density
+    vx.fill(0.0)
+    vy.fill(0.0)
 
-# Function to create a custom colormap
-def create_colormap(p_normalized):
-    """
-    Maps normalized pressure values to RGB colors.
-    Low pressure -> Blue
-    Medium pressure -> Green
-    High pressure -> Red
-    """
-    # Initialize RGB arrays
-    r = np.zeros_like(p_normalized)
-    g = np.zeros_like(p_normalized)
-    b = np.zeros_like(p_normalized)
+initialize()
 
-    # Blue to Green
-    mask1 = (p_normalized >= 0.0) & (p_normalized < 0.5)
-    r[mask1] = 0
-    g[mask1] = 2 * p_normalized[mask1]
-    b[mask1] = 1 - 2 * p_normalized[mask1]
-
-    # Green to Red
-    mask2 = (p_normalized >= 0.5) & (p_normalized <= 1.0)
-    r[mask2] = 2 * (p_normalized[mask2] - 0.5)
-    g[mask2] = 1 - 2 * (p_normalized[mask2] - 0.5)
-    b[mask2] = 0
-
-    # Stack into RGB
-    rgb = np.stack((r, g, b), axis=-1)
-
-    # Scale to 0-255
-    rgb = (rgb * 255).astype(np.uint8)
-
-    return rgb
-
-# Function to render the pressure field with custom colormap
-def render_pressure(p):
-    # Normalize pressure for visualization
-    p_normalized = np.clip(p, -1e-2, 1e-2)
-    p_normalized = (p_normalized + 1e-2) / (2e-2)  # Scale to [0,1]
-
-    # Apply custom colormap
-    p_colored = create_colormap(p_normalized)
-
-    # Pygame expects (width, height), so transpose the array
-    p_surface = pygame.surfarray.make_surface(p_colored.swapaxes(0, 1))
-
-    # Blit the surface onto the window
-    window.blit(p_surface, (0, 0))
-
-# Function to render dashboards
-def render_dashboards():
-    # Draw Dashboard Backgrounds
-    pygame.draw.rect(window, dashboard_bg_color, text_area_rect)
-    pygame.draw.rect(window, dashboard_bg_color, average_graph_rect)
-    pygame.draw.rect(window, dashboard_bg_color, cumulative_graph_rect)
-
-    # Display Information on Text Dashboard
-    start_x = text_area_rect.left + 10
-    start_y = text_area_rect.top + 10  # Starting y position for text
-    spacing = 20  # Spacing between lines
-
-    lines = [
-        "Continuum Acoustic Simulation",
-        f"Time Steps: {num_steps}",
-        f"Grid Nodes: {RES_X} x {RES_Y}",
-        f"Time Step (dt): {dt:.2e} s",
-        f"Speed of Sound (c): {c} m/s",
-        f"Damping Coefficient (gamma): {gamma}",
-        f"Ambient Density (rho0): {rho0} kg/m^3",
-        f"Current Mode: {'X-axis' if xchanging else 'Y-axis'}",
-        f"Press 'X' or 'Y' to change axis",
-        f"Press Number Keys (0-9) to set nodes",
-        f"Press SPACE to Pause/Unpause",
-        f"Press 'R' to Reset",
-        f"Press ESC to Quit",
-    ]
-
-    y_pos = start_y
-    for line in lines:
-        if y_pos + spacing > text_dashboard_height:
-            break
-        text_surface = font.render(line, True, (255, 255, 255))
-        window.blit(text_surface, (start_x, y_pos))
-        y_pos += spacing
-
-    # Display Average Pressure
-    if average_pressure_over_time:
-        avg_pressure = average_pressure_over_time[-1]
-    else:
-        avg_pressure = 0.0
-    avg_pressure_surface = font.render(f"Average Pressure: {avg_pressure:.6f} Pa", True, (255, 255, 255))
-    window.blit(avg_pressure_surface, (start_x, y_pos))
-    y_pos += spacing
-
-    # Display Total Energy
-    if total_energy_over_time:
-        total_energy = total_energy_over_time[-1]
-    else:
-        total_energy = 0.0
-    total_energy_surface = font.render(f"Total Energy: {total_energy:.6e} J", True, (255, 255, 255))
-    window.blit(total_energy_surface, (start_x, y_pos))
-    y_pos += spacing
-
-    # Display Key Press Data
-    for data in key_press_data[-5:]:  # Show last 5 key presses
-        step, key = data
-        key_surface = font.render(f"Key Pressed: '{key}' at step {step}", True, (255, 255, 255))
-        window.blit(key_surface, (start_x, y_pos))
-        y_pos += spacing
-        if y_pos + spacing > text_dashboard_height:
-            break
-
-    # Render Average Pressure Graph
-    if len(average_pressure_over_time) > 1:
-        graph_surface = pygame.Surface((average_graph_rect.width, average_graph_rect.height))
-        graph_surface.fill(dashboard_bg_color)
-        max_avg = max(average_pressure_over_time)
-        min_avg = min(average_pressure_over_time)
-        range_avg = max_avg - min_avg if max_avg != min_avg else 1.0
-        for i in range(1, len(average_pressure_over_time)):
-            x1 = int((i - 1) / len(average_pressure_over_time) * average_graph_rect.width)
-            y1 = int(average_graph_rect.height - ((average_pressure_over_time[i - 1] - min_avg) / range_avg) * average_graph_height)
-            x2 = int(i / len(average_pressure_over_time) * average_graph_rect.width)
-            y2 = int(average_graph_rect.height - ((average_pressure_over_time[i] - min_avg) / range_avg) * average_graph_height)
-            pygame.draw.line(graph_surface, (0, 255, 0), (x1, y1), (x2, y2), 1)
-        window.blit(graph_surface, average_graph_rect.topleft)
-
-    # Render Cumulative Pressure Distribution Graph
-    if len(total_energy_over_time) > 1:
-        graph_surface = pygame.Surface((cumulative_graph_rect.width, cumulative_graph_rect.height))
-        graph_surface.fill(dashboard_bg_color)
-        max_energy = max(total_energy_over_time)
-        min_energy = min(total_energy_over_time)
-        range_energy = max_energy - min_energy if max_energy != min_energy else 1.0
-        for i in range(1, len(total_energy_over_time)):
-            x1 = int((i - 1) / len(total_energy_over_time) * cumulative_graph_rect.width)
-            y1 = int(cumulative_graph_rect.height - ((total_energy_over_time[i - 1] - min_energy) / range_energy) * cumulative_graph_height)
-            x2 = int(i / len(total_energy_over_time) * cumulative_graph_rect.width)
-            y2 = int(cumulative_graph_rect.height - ((total_energy_over_time[i] - min_energy) / range_energy) * cumulative_graph_height)
-            pygame.draw.line(graph_surface, (0, 0, 255), (x1, y1), (x2, y2), 1)
-        window.blit(graph_surface, cumulative_graph_rect.topleft)
-
-# Function to process key presses
+# Process key presses to control simulation parameters
 def process_key_press(key):
-    global xchanging, message, kx_field, ky_field, paused, running, time_step
+    global xchanging, message, kx, ky, paused, running, key_press_data
     if key == pygame.K_ESCAPE:
-        pygame.quit()
-        sys.exit()
+        running = False
     elif key == pygame.K_r:
-        reset_simulation()
+        initialize()
     elif key == pygame.K_SPACE:
-        toggle_pause()
-    elif key in [pygame.K_0, pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
-                pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9]:
+        paused = not paused
+    elif key in [pygame.K_0, pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9]:
         val = int(pygame.key.name(key))
         if xchanging:
-            kx_field[0] = max(1, val)  # Ensure at least 1 node
+            kx[0] = val
         else:
-            ky_field[0] = max(1, val)
-        adjust_grid(kx_field[0], ky_field[0])
-        # Record the current time_step when a number key is pressed
-        key_press_data.append((time_step, pygame.key.name(key)))
+            ky[0] = val
+        # Record key press data
+        key_name = pygame.key.name(key)
+        key_press_data.append((time_step, key_name))
     elif key == pygame.K_x:
         xchanging = True
         message = "Changing number of nodes along X-axis"
@@ -310,73 +119,117 @@ def process_key_press(key):
         message = "Changing number of nodes along Y-axis"
         key_press_data.append((time_step, 'y'))
 
-# Function to toggle pause
-def toggle_pause():
-    global paused
-    paused = not paused
+# Update the simulation
+def update():
+    global vx, vy, rho
 
-# Function to reset simulation
-def reset_simulation():
-    global p_prev, p_curr, p_next, average_pressure_over_time, total_energy_over_time, num_steps, key_press_data
-    p_prev.fill(0)
-    p_curr.fill(0)
-    p_next.fill(0)
-    average_pressure_over_time = []
-    total_energy_over_time = []
-    num_steps = 0
-    key_press_data = []
+    # Compute acoustic force
+    f_acoustic_x, f_acoustic_y = compute_acoustic_force()
 
-# Initialize a pressure source
-def initialize_source():
-    global source_position
-    source_position = (RES_X // 2, RES_Y // 2)  # Center of the grid
+    # Update velocity fields with acoustic and drag forces
+    vx += dt * (-gamma * vx + f_acoustic_x / rho)
+    vy += dt * (-gamma * vy + f_acoustic_y / rho)
 
-initialize_source()
+    # Apply boundary conditions (reflective boundaries)
+    vx[0, :] = 0
+    vx[-1, :] = 0
+    vy[:, 0] = 0
+    vy[:, -1] = 0
 
-# Main Simulation Loop
-while running:
+# Render the simulation
+def render_simulation():
+    # Process events
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
+            global running
             running = False
         elif event.type == pygame.KEYDOWN:
             process_key_press(event.key)
 
-    if not paused:
-        # Add a pressure source (e.g., sinusoidal)
-        frequency = 1000  # Hz
-        amplitude = 1e-2 * math.sin(2 * PI * frequency * num_steps * dt)
-        add_source(p_curr, *source_position, amplitude)
-
-        # Update pressure fields
-        p_next = update_pressure(p_prev, p_curr, p_next)
-
-        # Rotate the pressure fields for next iteration
-        p_prev, p_curr, p_next = p_curr, p_next, p_prev
-
-        # Compute Metrics
-        avg_pressure = compute_average_pressure(p_curr)
-        total_energy = compute_total_energy(p_prev, p_curr, p_next)
-
-        average_pressure_over_time.append(avg_pressure)
-        total_energy_over_time.append(total_energy)
-
-        # Increment time step
-        num_steps += 1
-
     # Clear the screen
-    window.fill(background_color)
+    window.fill((17, 47, 65))  # Dark background
 
-    # Render Pressure Field
-    render_pressure(p_curr)
+    # Draw pressure minima lines
+    lines = []
+    if kx[0] > 0:
+        for x_line in np.linspace(.5 / kx[0], 1 - .5 / kx[0], kx[0]):
+            start_pos = (int(x_line * res), 0)
+            end_pos = (int(x_line * res), res)
+            lines.append((start_pos, end_pos))
 
-    # Render Dashboards
-    render_dashboards()
+    if ky[0] > 0:
+        for y_line in np.linspace(.5 / ky[0], 1 - .5 / ky[0], ky[0]):
+            start_pos = (0, int(y_line * res))
+            end_pos = (res, int(y_line * res))
+            lines.append((start_pos, end_pos))
 
-    # Update the display
+    for line in lines:
+        pygame.draw.line(window, (128, 128, 128), line[0], line[1], 1)  # Gray lines
+
+    # Normalize the speed field for visualization
+    speed = np.sqrt(vx**2 + vy**2)
+    speed_min = speed.min()
+    speed_max = speed.max()
+    if speed_max - speed_min == 0:
+        speed_max = speed_min + 1e-8
+    speed_normalized = (speed - speed_min) / (speed_max - speed_min)
+    speed_surface = (speed_normalized * 255).astype(np.uint8)
+
+    # Create a color map for speed
+    speed_color = np.dstack([speed_surface]*3)
+
+    # Transpose the array to match Pygame's coordinate system
+    speed_color = np.transpose(speed_color, (1, 0, 2))
+
+    # Create a pygame surface from the speed field
+    speed_surface = pygame.surfarray.make_surface(speed_color)
+    speed_surface = pygame.transform.scale(speed_surface, (res, res))
+
+    # Display the surface
+    window.blit(speed_surface, (0, 0))
+
+    # Draw Text Dashboard
+    pygame.draw.rect(window, (30, 30, 30), text_area_rect)  # Background for text area
+
+    # Display messages
+    start_x = text_area_rect.left + 10
+    start_y = text_area_rect.top + 10  # Starting y position for text
+    spacing = 20  # Spacing between lines
+    y_pos = start_y
+
+    # Display messages
+    if y_pos + spacing <= text_area_rect.bottom:
+        message_surface = font.render(message, True, (255, 255, 255))
+        window.blit(message_surface, (start_x, y_pos))
+        y_pos += spacing
+
+    # Display average speed
+    if average_speed_over_time:
+        avg_speed = average_speed_over_time[-1]
+    else:
+        avg_speed = 0.0
+    if y_pos + spacing <= text_area_rect.bottom:
+        avg_speed_surface = font.render(f"Average Speed: {avg_speed:.6f}", True, (255, 255, 255))
+        window.blit(avg_speed_surface, (start_x, y_pos))
+        y_pos += spacing
+
     pygame.display.flip()
 
-    # Cap the frame rate
-    clock.tick(60)  # 60 FPS
+# Main simulation loop
+while running:
+    if not paused:
+        update()
+
+        # Compute average speed for metrics
+        avg_speed = np.mean(np.sqrt(vx**2 + vy**2))
+        average_speed_over_time.append(avg_speed)
+
+        time_step += 1  # Increment the time step after each simulation step
+
+    # Render the simulation
+    render_simulation()
+
+    clock.tick(60)  # Limit to 60 FPS
 
 # Clean up and exit
 pygame.quit()
